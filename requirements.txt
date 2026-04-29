@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlalchemy
+bcrypt
+pydantic
+groq
+tavily-python
+google-auth
+requests
+psycopg2-binary
