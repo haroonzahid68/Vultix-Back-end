@@ -5,6 +5,7 @@ import urllib.parse
 import requests
 import base64
 import time
+from typing import Optional
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, Header
 from pydantic import BaseModel
