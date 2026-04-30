@@ -75,7 +75,7 @@ class ChatRequest(BaseModel):
     task: str = "friendly"
     selected_model: str = "auto"
     image_engine: str = "fast"
-    image_data: str = None  # NEW: Vision AI payload support
+    image_data: Optional[str] = None  # Ab ye null values ko block nahi karega! new vision ai feature
 
 def get_db():
     db = SessionLocal()
