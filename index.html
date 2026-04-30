@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vultix AI Pro | Agency Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <style>
+        :root { --bg: #050508; --accent: #6366f1; --cyan: #22d3ee; }
+        body { font-family: 'Outfit', sans-serif; background-color: var(--bg); color: #f8fafc; height: 100vh; overflow: hidden; background-image: radial-gradient(circle at 50% 0%, #1e1b4b, transparent); }
+        .glass-panel { background: rgba(15, 15, 25, 0.7); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .chat-area::-webkit-scrollbar { width: 5px; }
+        .chat-area::-webkit-scrollbar-thumb { background: #1e1b4b; border-radius: 10px; }
+        .ai-message { background: rgba(255, 255, 255, 0.03); border-left: 4px solid var(--accent); animation: slideIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        .user-message { background: linear-gradient(135deg, #312e81, #1e1b4b); align-self: flex-end; animation: slideIn 0.3s ease-out forwards; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+        .typing-dot { animation: typing 1.4s infinite ease-in-out both; }
+        .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes typing { 0%, 80%, 100% { transform: scale(0); opacity: 0.5; } 40% { transform: scale(1); opacity: 1; box-shadow: 0 0 10px var(--accent); } }
+        .image-wrapper { position: relative; display: inline-block; margin-top: 15px; }
+        .ai-message img { max-width: 100%; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 2px solid rgba(99, 102, 241, 0.2); transition: 0.3s; }
+        .ai-message img:hover { border-color: var(--cyan); }
+        .ai-message pre { background: #1e1e2e; border-radius: 8px; padding: 16px; margin: 12px 0; overflow-x: auto; border: 1px solid rgba(255, 255, 255, 0.1); }
+        .mode-pill { transition: all 0.2s; cursor: pointer; padding: 6px 14px; border-radius: 20px; font-size: 12px; display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); }
+        .mode-pill:hover { background: rgba(99, 102, 241, 0.2); }
+        .active-pill { background: var(--accent); border-color: var(--accent); color: white; box-shadow: 0 0 10px rgba(99, 102, 241, 0.4); }
+    </style>
+</head>
+<body class="flex">
+
+    <aside class="w-72 glass-panel h-screen p-6 flex flex-col border-r border-white/5 z-10">
+        <div class="mb-6 text-center">
+            <h1 class="text-3xl font-black italic text-indigo-500 tracking-tighter">VULTIX AI</h1>
+            <p class="text-[10px] text-slate-500 uppercase tracking-[4px] mt-1 italic">Agency Edition</p>
+        </div>
+        
+        <button onclick="startNewChat()" class="w-full mb-6 bg-indigo-600 hover:bg-indigo-500 text-white p-3 rounded-xl text-sm font-bold transition-all shadow-lg flex items-center justify-center gap-2">
+            <i data-lucide="plus" class="w-4 h-4"></i> New Chat
+        </button>
+
+        <div id="history-container" class="flex-1 overflow-y-auto chat-area pr-2 space-y-2">
+            <p class="text-[10px] text-slate-500 font-bold mb-4 uppercase ml-2"><i data-lucide="history" class="w-3 h-3 inline"></i> Recent Chats</p>
+        </div>
+        
+        <div class="mt-auto pt-6 border-t border-white/5">
+            <div class="flex items-center gap-3 p-3 bg-white/5 rounded-2xl">
+                <div id="user-initials" class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center font-bold shadow-lg uppercase text-lg">U</div>
+                <div class="text-xs truncate w-32">
+                    <p id="user-display-name" class="font-bold truncate">User</p>
+                    <p id="user-display-username" class="text-cyan-400 text-[10px] font-bold truncate">@agent</p>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <main class="flex-1 flex flex-col relative">
+        <header class="h-16 flex items-center justify-between px-8 glass-panel border-b border-white/5">
+            <div class="flex items-center gap-3">
+                <span id="current-mode-badge" class="text-[10px] bg-indigo-500/20 text-indigo-400 px-4 py-1.5 rounded-full font-bold uppercase tracking-wider">Friendly Chat</span>
+                <span id="quota-badge" class="text-[10px] bg-cyan-500/10 text-cyan-400 px-3 py-1 rounded-full border border-cyan-500/20">Limits Loading...</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <select id="chat-model-selector" class="bg-white/5 border border-white/10 rounded-lg text-xs p-2 text-slate-300 outline-none hover:bg-white/10 cursor-pointer">
+                    <option value="auto" class="bg-gray-900">Text: Auto Select</option>
+                    <option value="llama-3.3-70b-versatile" class="bg-gray-900">Llama 3 70B (Pro)</option>
+                    <option value="llama-3.1-8b-instant" class="bg-gray-900">Llama 3 8B (Fast)</option>
+                </select>
+                <select id="image-engine-selector" class="hidden bg-white/5 border border-white/10 rounded-lg text-xs p-2 text-slate-300 outline-none hover:bg-white/10 cursor-pointer">
+                    <option value="fast" class="bg-gray-900">Image: Fast (Pollinations)</option>
+                    <option value="hd" class="bg-gray-900">Image: HD Pro (Hugging Face)</option>
+                </select>
+                <button onclick="logoutUser()" class="text-slate-400 hover:text-red-400 p-2"><i data-lucide="log-out" class="w-5 h-5"></i></button>
+            </div>
+        </header>
+
+        <div id="chat-container" class="chat-area flex-1 overflow-y-auto p-10 flex flex-col gap-6">
+            <div class="ai-message p-6 rounded-2xl max-w-2xl text-sm leading-relaxed shadow-lg">
+                Ki haal ae jani? 😎 Main hoon **Vultix AI**. Aaj kya scene hai?
+            </div>
+        </div>
+
+        <div id="typing-indicator" class="hidden px-10 pb-2">
+            <div class="ai-message p-4 rounded-2xl max-w-[120px] bg-white/5 flex items-center justify-center gap-2">
+                <div class="w-2 h-2 bg-indigo-500 rounded-full typing-dot"></div><div class="w-2 h-2 bg-indigo-500 rounded-full typing-dot"></div><div class="w-2 h-2 bg-indigo-500 rounded-full typing-dot"></div>
+            </div>
+        </div>
+
+        <div class="p-6 bg-gradient-to-t from-[#050508] to-transparent">
+            <div class="max-w-4xl mx-auto flex flex-wrap gap-2 mb-4 px-2">
+                <div id="mode-friendly" class="mode-pill active-pill" onclick="setMode('friendly', 'Friendly Chat')"><i data-lucide="message-circle" class="w-3.5 h-3.5"></i> Friendly</div>
+                <div id="mode-coding" class="mode-pill" onclick="setMode('coding', 'Coding Mode')"><i data-lucide="code-2" class="w-3.5 h-3.5"></i> Coding</div>
+                <div id="mode-uiux" class="mode-pill" onclick="setMode('uiux', 'UI/UX Architect')"><i data-lucide="layout" class="w-3.5 h-3.5"></i> UI/UX</div>
+                <div id="mode-image" class="mode-pill border-indigo-400/50 text-indigo-300" onclick="setMode('image', 'Image Studio 🎨')"><i data-lucide="image" class="w-3.5 h-3.5"></i> Image Studio</div>
+            </div>
+            
+            <div class="max-w-4xl mx-auto glass-panel p-2 rounded-2xl border border-white/10 flex items-center gap-4 transition-all focus-within:border-indigo-500">
+                <input type="text" id="user-input-box" class="flex-1 bg-transparent border-none outline-none px-4 text-sm text-white" placeholder="Message Vultix AI...">
+                <button onclick="sendMessageToBackend()" class="bg-indigo-600 p-3.5 rounded-xl hover:bg-indigo-500 text-white shadow-lg"><i data-lucide="send"></i></button>
+            </div>
+
+            <div class="max-w-4xl mx-auto mt-3 text-center">
+                <p class="text-[10px] text-slate-500 tracking-wide">Vultix AI can make mistakes. Consider verifying important information.</p>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        var activeMode = 'friendly';
+        var currentSession = "session_" + Date.now();
+        var userId = localStorage.getItem('user_id');
+
+        document.addEventListener("DOMContentLoaded", function() {
+            if(!userId) { window.location.href = 'auth.html'; return; }
+            
+            lucide.createIcons();
+            marked.setOptions({
+                highlight: function(code, lang) {
+                    const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                    return hljs.highlight(code, { language }).value;
+                }
+            });
+
+            const fName = localStorage.getItem('full_name') || 'Agent Vultix';
+            const uName = localStorage.getItem('username') || 'user';
+            document.getElementById('user-display-name').innerText = fName;
+            document.getElementById('user-display-username').innerText = '@' + uName.split('@')[0];
+            document.getElementById('user-initials').innerText = fName.charAt(0);
+
+            loadHistorySidebar();
+            updateQuotaDisplay("20 Left"); 
+        });
+
+        function updateQuotaDisplay(txt) {
+            document.getElementById('quota-badge').innerText = txt;
+        }
+
+        function setMode(selectedMode, modeName) {
+            activeMode = selectedMode;
+            document.querySelectorAll('.mode-pill').forEach(item => item.classList.remove('active-pill'));
+            document.getElementById('mode-' + selectedMode).classList.add('active-pill');
+            document.getElementById('current-mode-badge').innerText = modeName.toUpperCase();
+            
+            const input = document.getElementById('user-input-box');
+            const chatSelector = document.getElementById('chat-model-selector');
+            const imageSelector = document.getElementById('image-engine-selector');
+
+            if(selectedMode === 'image') {
+                input.placeholder = "Describe the image you want to generate...";
+                chatSelector.classList.add('hidden'); imageSelector.classList.remove('hidden');
+            } else {
+                input.placeholder = "Message Vultix AI...";
+                chatSelector.classList.remove('hidden'); imageSelector.classList.add('hidden');
+            }
+        }
+
+        function addDownloadButtonsToImages(containerDiv) {
+            const images = containerDiv.querySelectorAll('img');
+            images.forEach(img => {
+                if (img.parentElement.classList.contains('image-wrapper')) return;
+                
+                const wrapper = document.createElement('div');
+                wrapper.className = 'image-wrapper group';
+                img.parentNode.insertBefore(wrapper, img);
+                wrapper.appendChild(img);
+                
+                const downloadBtn = document.createElement('button');
+                downloadBtn.className = 'absolute bottom-3 right-3 bg-indigo-600 hover:bg-cyan-500 text-white p-2 rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-all flex items-center gap-2 text-xs font-bold z-10 cursor-pointer';
+                downloadBtn.innerHTML = `<i data-lucide="download" class="w-4 h-4"></i> Download`;
+                
+                downloadBtn.onclick = async (e) => {
+                    e.preventDefault();
+                    downloadBtn.innerHTML = `<i data-lucide="loader" class="w-4 h-4 animate-spin"></i> Loading`;
+                    try {
+                        const response = await fetch(img.src);
+                        const blob = await response.blob();
+                        const blobUrl = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.style.display = 'none';
+                        a.href = blobUrl;
+                        a.download = 'Vultix_Masterpiece.png';
+                        document.body.appendChild(a);
+                        a.click();
+                        window.URL.revokeObjectURL(blobUrl);
+                        downloadBtn.innerHTML = `<i data-lucide="check" class="w-4 h-4"></i> Saved`;
+                    } catch(err) {
+                        downloadBtn.innerHTML = `Error`;
+                    }
+                    setTimeout(() => { downloadBtn.innerHTML = `<i data-lucide="download" class="w-4 h-4"></i> Download`; lucide.createIcons(); }, 2000);
+                };
+                wrapper.appendChild(downloadBtn);
+            });
+            lucide.createIcons();
+        }
+
+        function applyCopyButtons() {
+            document.querySelectorAll('pre').forEach((block) => {
+                if (block.querySelector('.copy-btn')) return;
+                const btn = document.createElement('button');
+                btn.className = 'copy-btn absolute top-2 right-2 bg-white/10 hover:bg-indigo-500 text-[10px] px-3 py-1 rounded transition-colors text-white uppercase font-bold tracking-wider';
+                btn.innerText = 'Copy';
+                btn.onclick = () => {
+                    const code = block.querySelector('code') ? block.querySelector('code').innerText : block.innerText;
+                    navigator.clipboard.writeText(code);
+                    btn.innerText = 'Copied!';
+                    btn.classList.replace('bg-white/10', 'bg-green-500');
+                    setTimeout(() => { btn.innerText = 'Copy'; btn.classList.replace('bg-green-500', 'bg-white/10'); }, 2000);
+                };
+                block.appendChild(btn);
+            });
+        }
+
+        function startNewChat() {
+            currentSession = "session_" + Date.now();
+            const chatContainer = document.getElementById('chat-container');
+            chatContainer.innerHTML = `<div class="ai-message p-6 rounded-2xl max-w-2xl text-sm leading-relaxed shadow-lg">Nayi chat start ho gayi hai jani! 😎 Bolo kya scene hai?</div>`;
+            loadHistorySidebar(); 
+        }
+
+        async function loadHistorySidebar() {
+            try {
+                const response = await fetch(`https://vultix-back-end.onrender.com/history/${userId}`);
+                const data = await response.json();
+                const historyContainer = document.getElementById('history-container');
+                historyContainer.innerHTML = '<p class="text-[10px] text-slate-500 font-bold mb-4 uppercase ml-2"><i data-lucide="history" class="w-3 h-3 inline"></i> Recent Chats</p>';
+                if(data.history && data.history.length > 0) {
+                    data.history.forEach(session => {
+                        historyContainer.innerHTML += `
+                            <div class="group flex items-center justify-between text-xs text-slate-400 p-3 bg-white/5 rounded-lg mb-2 hover:bg-white/10 transition-colors border border-transparent hover:border-white/10 shadow-sm">
+                                <div class="truncate flex-1 cursor-pointer" onclick="loadSessionChat('${session.session_id}')">
+                                    <i data-lucide="message-square" class="w-3 h-3 inline mr-2"></i>${session.title}
+                                </div>
+                                <button onclick="deleteSessionChat('${session.session_id}')" class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-500 p-1 transition-opacity" title="Delete Chat">
+                                    <i data-lucide="trash-2" class="w-3 h-3"></i>
+                                </button>
+                            </div>
+                        `;
+                    });
+                    lucide.createIcons();
+                }
+            } catch (e) { console.log("No history found."); }
+        }
+
+        async function deleteSessionChat(sessId) {
+            if(!confirm("Bhai, kya sach mein is chat ko delete karna hai? 💀")) return;
+            try {
+                const res = await fetch(`https://vultix-back-end.onrender.com/history/session/${sessId}`, { method: 'DELETE' });
+                if(res.ok) {
+                    if(currentSession === sessId) startNewChat();
+                    else loadHistorySidebar();
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        async function loadSessionChat(sessId) {
+            currentSession = sessId;
+            const chatContainer = document.getElementById('chat-container');
+            chatContainer.innerHTML = ''; 
+            try {
+                const res = await fetch(`https://vultix-back-end.onrender.com/history/session/${sessId}`);
+                const data = await res.json();
+                if(data.chats) {
+                    data.chats.forEach(chat => {
+                        chatContainer.insertAdjacentHTML('beforeend', `<div class="user-message p-5 rounded-2xl max-w-2xl text-sm shadow-lg ml-auto">${chat.message}</div>`);
+                        const msgDiv = document.createElement('div');
+                        msgDiv.className = 'ai-message p-6 rounded-2xl max-w-2xl text-sm leading-relaxed shadow-lg';
+                        msgDiv.innerHTML = marked.parse(chat.response);
+                        chatContainer.appendChild(msgDiv);
+                        addDownloadButtonsToImages(msgDiv);
+                    });
+                    applyCopyButtons();
+                }
+            } catch(e) {}
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // ==========================================
+        // MAGIC STREAMING EFFECT ADDED HERE 🔥
+        // ==========================================
+        async function streamText(container, fullText) {
+            let currentText = "";
+            let chunkSize = 3; // Type 3 characters at a time for smooth speed
+            
+            for (let i = 0; i < fullText.length; i += chunkSize) {
+                currentText += fullText.substring(i, i + chunkSize);
+                container.innerHTML = marked.parse(currentText);
+                
+                // Auto-scroll during streaming
+                const chatArea = document.getElementById('chat-container');
+                chatArea.scrollTop = chatArea.scrollHeight;
+                
+                // Small delay to create the typing effect
+                await new Promise(resolve => setTimeout(resolve, 8)); 
+            }
+            
+            // Re-apply buttons after streaming finishes
+            addDownloadButtonsToImages(container);
+            applyCopyButtons();
+        }
+
+        async function sendMessageToBackend() {
+            const inputField = document.getElementById('user-input-box');
+            const chatContainer = document.getElementById('chat-container');
+            const typingIndicator = document.getElementById('typing-indicator');
+            const chatModel = document.getElementById('chat-model-selector').value;
+            const imageEngine = document.getElementById('image-engine-selector').value;
+            const messageText = inputField.value.trim();
+
+            if (messageText === "") return;
+
+            chatContainer.insertAdjacentHTML('beforeend', `<div class="user-message p-5 rounded-2xl max-w-2xl text-sm shadow-lg ml-auto">${messageText}</div>`);
+            inputField.value = '';
+            typingIndicator.classList.remove('hidden');
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            try {
+                const response = await fetch('https://vultix-back-end.onrender.com/process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: parseInt(userId),
+                        session_id: currentSession,
+                        transcript: messageText,
+                        task: activeMode,
+                        selected_model: chatModel,
+                        image_engine: imageEngine
+                    })
+                });
+
+                const responseData = await response.json();
+                typingIndicator.classList.add('hidden');
+                
+                if (responseData.error === "LIMIT_REACHED") {
+                    chatContainer.insertAdjacentHTML('beforeend', `<div class="text-red-400 text-xs text-center p-3 bg-red-500/10 rounded my-2 border border-red-500/20 font-bold uppercase">🚨 Daily Quota Exceeded! Come back in 24 hours.</div>`);
+                    updateQuotaDisplay("0 Left (Locked)");
+                } 
+                else if (responseData.data) {
+                    // Create empty container for the response
+                    const msgDiv = document.createElement('div');
+                    msgDiv.className = 'ai-message p-6 rounded-2xl max-w-2xl text-sm leading-relaxed shadow-lg';
+                    chatContainer.appendChild(msgDiv);
+                    
+                    // Call the Streaming Function!
+                    await streamText(msgDiv, responseData.data);
+                    
+                    loadHistorySidebar();
+                    
+                    if(responseData.remaining !== undefined) updateQuotaDisplay(`${responseData.remaining} Left`);
+                } else if (responseData.error) {
+                    chatContainer.insertAdjacentHTML('beforeend', `<div class="text-red-400 text-xs text-center p-2 bg-red-500/10 rounded my-2">Error: ${responseData.error}</div>`);
+                }
+            } catch (error) {
+                typingIndicator.classList.add('hidden');
+                chatContainer.insertAdjacentHTML('beforeend', `<div class="text-red-400 text-xs text-center p-2 bg-red-500/10 rounded my-2">Server Offline! Please check terminal. 💀</div>`);
+            }
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        document.getElementById('user-input-box').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') sendMessageToBackend();
+        });
+
+        function logoutUser() {
+            localStorage.clear();
+            window.location.href = 'auth.html';
+        }
+    </script>
+</body>
+</html>
