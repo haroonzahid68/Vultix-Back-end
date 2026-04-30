@@ -1,9 +1,10 @@
 import uvicorn
 import bcrypt
-import os # Ye zaroori hai
+import os
 import urllib.parse
 import requests
 import base64
+import time
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
@@ -16,22 +17,12 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from tavily import TavilyClient
 
-# ==========================================
-# 1. CONFIGURATION & SECURED API KEYS
-# ==========================================
-# Ab keys code mein nahi hain, Server (Render) se aayengi!
-GOOGLE_CLIENT_ID = "1040604821889-nlp7drjmimem7p2ldh1bkhkepp9f1hii.apps.googleusercontent.com" # Ye public ID hoti hai, safe hai.
+GOOGLE_CLIENT_ID = "1040604821889-nlp7drjmimem7p2ldh1bkhkepp9f1hii.apps.googleusercontent.com"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 HF_API_KEY = os.getenv("HF_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# ... (Baqi saara code wese ka wesa hi rahega neechay tak) ...
-
-# ==========================================
-# 2. DATABASE SETUP
-# ==========================================
-# Agar local SQLite hai toh check_same_thread lagao, warna Supabase (Postgres) ke liye normal rakho
 if DATABASE_URL and DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
@@ -60,18 +51,12 @@ class Chat(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# ==========================================
-# 3. FASTAPI APP & MIDDLEWARE
-# ==========================================
 app = FastAPI(title="Vultix AI Core Engine")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 client = Groq(api_key=GROQ_API_KEY)
 tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
-# ==========================================
-# 4. PYDANTIC SCHEMAS
-# ==========================================
 class AuthRequest(BaseModel):
     full_name: str = "User"
     username: str
@@ -93,16 +78,14 @@ def get_db():
     try: yield db
     finally: db.close()
 
-# ==========================================
-# 5. AUTHENTICATION ENDPOINTS
-# ==========================================
 @app.post("/signup")
 async def signup(request: AuthRequest, db: Session = Depends(get_db)):
     if db.query(User).filter(User.username == request.username).first(): 
         raise HTTPException(status_code=400, detail="USERNAME_TAKEN") 
     hashed_pw = bcrypt.hashpw(request.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     new_user = User(full_name=request.full_name, username=request.username, hashed_password=hashed_pw)
-    db.add(new_user); db.commit()
+    db.add(new_user)
+    db.commit()
     return {"message": "Success"}
 
 @app.post("/login")
@@ -121,20 +104,18 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
         user = db.query(User).filter(User.username == email).first()
         if not user:
             user = User(full_name=name, username=email, hashed_password="GOOGLE_VERIFIED_USER")
-            db.add(user); db.commit(); db.refresh(user)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
         return {"user_id": user.id, "username": user.username, "full_name": user.full_name}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Google Login Failed: {str(e)}")
 
-# ==========================================
-# 6. CORE AI ENGINE (WITH LIMITS & SAAS PROMPTS)
-# ==========================================
 @app.post("/process")
 async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == request.user_id).first()
     if not user: return {"error": "User missing!"}
 
-    # --- QUOTA SYSTEM (20 Limits) ---
     now = datetime.utcnow()
     if not user.last_reset_time: user.last_reset_time = now
     if (now - user.last_reset_time).total_seconds() > 86400: 
@@ -143,9 +124,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         db.commit()
 
     if user.response_count >= 50: return {"error": "LIMIT_REACHED"}
-    # --------------------------------
 
-    # IMAGE ENGINE LOGIC
     if request.task == "image":
         if request.image_engine == "hd":
             API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
@@ -156,16 +135,20 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
                 ai_response = f"![Generated Image](data:image/png;base64,{img_data})"
             else: ai_response = "HF Engine is warming up. Please try again! ⏳"
         else:
-            encoded_prompt = urllib.parse.quote(request.transcript)
-            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+            VIP_STYLE_ENHANCERS = ", volumetric lighting, 8k resolution, hyper-detailed, photorealistic, dramatic composition, masterpieces by masterful artists, cinematic quality, no cartoon."
+            cleaned_prompt = request.transcript.strip()[:200]
+            vip_prompt = cleaned_prompt + VIP_STYLE_ENHANCERS
+            encoded_prompt = urllib.parse.quote(vip_prompt)
+            seed = int(time.time())
+            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&width=720&height=1280&nologo=true"
             ai_response = f"![Generated Image]({image_url})"
         
         new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_response)
         user.response_count += 1 
-        db.add(new_chat); db.commit()
-        return {"data": ai_response, "remaining": 20 - user.response_count}
+        db.add(new_chat)
+        db.commit()
+        return {"data": ai_response, "remaining": 50 - user.response_count}
 
-    # TEXT ENGINE LOGIC & SAAS PROMPTS
     model_to_use = "llama-3.3-70b-versatile" if request.task in ["coding", "study"] else "llama-3.1-8b-instant"
     
     task_rules = ""
@@ -178,8 +161,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     else:
         task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Use casual Pakistani Roman Urdu mixed with English words. Keep spellings simple (e.g., 'karna', 'masla'). Keep technical terms in English. TONE: Sarcastic, use emojis (🔥, 💀, 🚀, 😂)."
 
-    # THE CREATOR IDENTITY
-    creator_info = "If anyone asks who created, made, or developed you, proudly state that you are Vultix AI, developed by Muhammad Haroon Zahid, a 20-year-old tech entrepreneur, IT & Software agency owner, and BS IET student at the University of Lahore."
+    creator_info = "If anyone asks who created, made, or developed you, proudly state that you are Vultix AI, developed by Muhammad Haroon Zahid, a 20-year-old tech entrepreneur and IT & Software agency owner from Bahawalpur, currently living in Lahore and studying BS IET at the University of Lahore."
     
     system_instr = f"You are Vultix AI, a premium SaaS assistant.\n{creator_info}\n{task_rules}"
     
@@ -197,13 +179,11 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         ai_msg = res.choices[0].message.content
         new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_msg)
         user.response_count += 1 
-        db.add(new_chat); db.commit()
-        return {"data": ai_msg, "remaining": 20 - user.response_count}
+        db.add(new_chat)
+        db.commit()
+        return {"data": ai_msg, "remaining": 50 - user.response_count}
     except Exception as e: return {"error": str(e)}
 
-# ==========================================
-# 7. CHAT HISTORY & DELETE ENDPOINTS
-# ==========================================
 @app.get("/history/{user_id}")
 async def get_user_history(user_id: int, db: Session = Depends(get_db)):
     chats = db.query(Chat).filter(Chat.user_id == user_id).order_by(Chat.timestamp.desc()).all()
