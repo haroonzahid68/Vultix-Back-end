@@ -22,7 +22,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 HF_API_KEY = os.getenv("HF_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
-ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "CEO123")
+ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "ceo123")
 
 if DATABASE_URL and DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -74,6 +74,7 @@ class ChatRequest(BaseModel):
     task: str = "friendly"
     selected_model: str = "auto"
     image_engine: str = "fast"
+    image_data: str = None  # NEW: Vision AI payload support
 
 def get_db():
     db = SessionLocal()
@@ -136,6 +137,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
 
     if user.response_count >= 50: return {"error": "LIMIT_REACHED"}
 
+    # IMAGE GENERATION LOGIC (Image Studio)
     if request.task == "image":
         if request.image_engine == "hd":
             API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
@@ -160,7 +162,12 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         db.commit()
         return {"data": ai_response, "remaining": 50 - user.response_count}
 
+    # TEXT & VISION AI ENGINE LOGIC
     model_to_use = "llama-3.3-70b-versatile" if request.task in ["coding", "study"] else "llama-3.1-8b-instant"
+    
+    # VISION AI OVERRIDE
+    if request.image_data:
+        model_to_use = "llama-3.2-11b-vision-preview"  # Automatically switch to Vision Model if picture is present
 
     task_rules = ""
     if request.task == "viral":
@@ -183,12 +190,26 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         messages.append({"role": "user", "content": h.message})
         messages.append({"role": "assistant", "content": h.response})
 
-    messages.append({"role": "user", "content": request.transcript})
+    # DYNAMIC MESSAGE FORMATTING FOR VISION AI
+    if request.image_data:
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": request.transcript},
+                {"type": "image_url", "image_url": {"url": request.image_data}}
+            ]
+        })
+    else:
+        messages.append({"role": "user", "content": request.transcript})
 
     try:
         res = client.chat.completions.create(model=model_to_use, messages=messages)
         ai_msg = res.choices[0].message.content
-        new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_msg)
+        
+        # Save transcript to DB (We DO NOT save Base64 image to DB to prevent storage crash)
+        db_message = f"[Sent an Image] {request.transcript}" if request.image_data else request.transcript
+        
+        new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=db_message, response=ai_msg)
         user.response_count += 1
         db.add(new_chat)
         db.commit()
