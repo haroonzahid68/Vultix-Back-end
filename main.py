@@ -168,7 +168,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     
     # VISION AI OVERRIDE
     if request.image_data:
-        model_to_use = "llama-3.2-90b-vision-preview"  # Naya aur zyada powerful model!
+        model_to_use = "llama-3.2-11b-vision-instruct"  # Groq ka latest stable vision model
 
     task_rules = ""
     if request.task == "viral":
