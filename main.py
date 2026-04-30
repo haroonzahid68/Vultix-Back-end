@@ -142,7 +142,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         user.last_reset_time = now
         db.commit()
 
-    if user.response_count >= 20: return {"error": "LIMIT_REACHED"}
+    if user.response_count >= 50: return {"error": "LIMIT_REACHED"}
     # --------------------------------
 
     # IMAGE ENGINE LOGIC
