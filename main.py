@@ -22,7 +22,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 HF_API_KEY = os.getenv("HF_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
-ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "ceo123")
+ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "CEO123")
 
 if DATABASE_URL and DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
