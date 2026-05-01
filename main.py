@@ -408,5 +408,16 @@ async def toggle_user_ban(user_id: int, db: Session = Depends(get_db), _: None =
     db.commit()
     return {"message": "Status updated", "is_banned": user.is_banned}
 
+@app.post("/admin/toggle_pro/{user_id}")
+async def toggle_user_pro(user_id: int, db: Session = Depends(get_db), _: None = Depends(verify_admin)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user: raise HTTPException(status_code=404, detail="User not found")
+    
+    # User ka current status ulta kar do (Free hai toh Pro, Pro hai toh Free)
+    user.is_pro = not user.is_pro
+    db.commit()
+    
+    return {"message": "Premium status updated", "is_pro": user.is_pro}
+
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
