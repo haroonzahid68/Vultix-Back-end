@@ -253,6 +253,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     
     if request.task == "coding":
         # 🚀 GOOGLE GEMINI API LOGIC FOR CODING
+        # 🚀 GOOGLE GEMINI API LOGIC FOR CODING
         system_instr = "ROLE: Senior 10x Software Engineer & Elite Academic Logic Expert. CRITICAL RULE: When writing C++ code or providing solutions, strictly align with academic requirements. You must use precise logic structures and exact naming conventions as required for strict academic integrity. Absolutely NO code comments in generated code unless explicitly needed to explain a required logic structure. Output ONLY raw, clean logic."
         
         # Format history for Gemini
@@ -261,17 +262,19 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             contents.append({"role": "user", "parts": [{"text": h.message}]})
             contents.append({"role": "model", "parts": [{"text": h.response}]})
         
-        contents.append({"role": "user", "parts": [{"text": request.transcript}]})
+        # 🔥 THE VIP HACK: Inject System Rules directly into the current prompt invisibly!
+        final_prompt = f"[{system_instr}]\n\nUser Request: {request.transcript}"
+        contents.append({"role": "user", "parts": [{"text": final_prompt}]})
         
+        # No system_instruction field! Simple and 100% Error-Free JSON Payload
         gemini_payload = {
-            "systemInstruction": {"parts": [{"text": system_instr}]},
             "contents": contents
         }
         
         try:
             if not GEMINI_API_KEY: return {"error": "Gemini API Key is missing on Server"}
             
-            # Use Gemini 1.5 Pro for VIP Users, Flash for Free Users (Both are incredibly smart)
+            # Use Stable v1 API with standard model names
             model_name = "gemini-1.5-pro" if user.is_pro else "gemini-1.5-flash"
             gemini_url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             
