@@ -163,13 +163,13 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         db.commit()
         return {"data": ai_response, "remaining": 50 - user.response_count}
 
-    # TEXT & VISION AI ENGINE LOGIC
+   # TEXT & VISION AI ENGINE LOGIC
     model_to_use = "llama-3.3-70b-versatile" if request.task in ["coding", "study"] else "llama-3.1-8b-instant"
     
-    # VISION AI OVERRIDE
-    # VISION AI OVERRIDE
+    # VISION AI OVERRIDE WITH SMART FALLBACK 🧠
     if request.image_data:
-        model_to_use = "llama-3.2-11b-vision-preview"  # Ye exact ID abhi live aur active hai
+        # Pata nahi Groq walon ka mood kaisa ho, isliye hum best available models ki list bhejenge
+        model_to_use = "llama-3.2-90b-vision-instruct"
 
     task_rules = ""
     if request.task == "viral":
@@ -205,6 +205,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         messages.append({"role": "user", "content": request.transcript})
 
     try:
+        # First Attempt: Try the primary vision model
         res = client.chat.completions.create(model=model_to_use, messages=messages)
         ai_msg = res.choices[0].message.content
         
@@ -216,7 +217,26 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         db.add(new_chat)
         db.commit()
         return {"data": ai_msg, "remaining": 50 - user.response_count}
-    except Exception as e: return {"error": str(e)}
+        
+    except Exception as e: 
+        error_msg = str(e)
+        # Agar Model Decommission ka error aaye toh 11B par auto-fallback kare
+        if "model_decommissioned" in error_msg or "model_not_found" in error_msg and request.image_data:
+            try:
+                fallback_model = "llama-3.2-11b-vision-instruct"
+                res = client.chat.completions.create(model=fallback_model, messages=messages)
+                ai_msg = res.choices[0].message.content
+                
+                db_message = f"[Sent an Image] {request.transcript}"
+                new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=db_message, response=ai_msg)
+                user.response_count += 1
+                db.add(new_chat)
+                db.commit()
+                return {"data": ai_msg, "remaining": 50 - user.response_count}
+            except Exception as inner_e:
+                return {"error": f"Vision API Issue: Go to console.groq.com/docs/models to check active model names. Details: {str(inner_e)}"}
+                
+        return {"error": error_msg}
 
 @app.get("/history/{user_id}")
 async def get_user_history(user_id: int, db: Session = Depends(get_db)):
