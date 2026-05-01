@@ -226,24 +226,37 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     if not user.is_pro and user.response_count >= 50: 
         return {"error": "LIMIT_REACHED"}
 
-    # 🎨 IMAGE GENERATION LOGIC
+    # 🎨 IMAGE GENERATION LOGIC WITH ASPECT RATIO
     if request.task == "image":
+        # Default sizes
+        width, height = 1024, 1024 # Square
+        
+        # Check aspect ratio from request (Hum isay 'task' ya 'image_engine' ke sath bhej sakte hain)
+        # For simplicity, let's assume 'selected_model' field carries the ratio for images
+        ratio = request.selected_model 
+        
+        if ratio == "16:9": # YouTube / Landscape
+            width, height = 1280, 720
+        elif ratio == "9:16": # TikTok / Reels / Portrait
+            width, height = 720, 1280
+
         if request.image_engine == "hd":
             if not user.is_pro: return {"error": "PRO_FEATURE"}
             API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
             headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+            # HD Engine automatically handles aspect ratios well
             response = requests.post(API_URL, headers=headers, json={"inputs": request.transcript})
             if response.status_code == 200:
                 img_data = base64.b64encode(response.content).decode("utf-8")
                 ai_response = f"![Generated Image](data:image/png;base64,{img_data})"
             else: ai_response = "HF Engine is warming up. Please try again! ⏳"
         else:
-            VIP_STYLE_ENHANCERS = ", volumetric lighting, 8k resolution, hyper-detailed, photorealistic, dramatic composition, masterpieces by masterful artists, cinematic quality, no cartoon."
+            # Fast Engine (Pollinations) with dynamic width/height
+            VIP_STYLE_ENHANCERS = ", volumetric lighting, 8k resolution, photorealistic, cinematic quality."
             cleaned_prompt = request.transcript.strip()[:200]
-            vip_prompt = cleaned_prompt + VIP_STYLE_ENHANCERS
-            encoded_prompt = urllib.parse.quote(vip_prompt)
+            encoded_prompt = urllib.parse.quote(cleaned_prompt + VIP_STYLE_ENHANCERS)
             seed = int(time.time())
-            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&width=720&height=1280&nologo=true"
+            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&width={width}&height={height}&nologo=true"
             ai_response = f"![Generated Image]({image_url})"
 
         new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_response)
