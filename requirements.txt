@@ -8,3 +8,4 @@ tavily-python
 google-auth
 requests
 psycopg2-binary
+google-generativeai
