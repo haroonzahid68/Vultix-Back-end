@@ -267,6 +267,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         contents.append({"role": "user", "parts": [{"text": final_prompt}]})
         
         # No system_instruction field! Simple and 100% Error-Free JSON Payload
+        # No system_instruction field! Simple and 100% Error-Free JSON Payload
         gemini_payload = {
             "contents": contents
         }
@@ -274,17 +275,34 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         try:
             if not GEMINI_API_KEY: return {"error": "Gemini API Key is missing on Server"}
             
-            # Use Stable v1 API with standard model names
-            model_name = "gemini-1.5-pro" if user.is_pro else "gemini-1.5-flash"
-            gemini_url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            # 🚀 THE MASTERSTROKE: Fallback Array
+            # Agar ek model fail ho, toh automatically agla try karo!
+            models_to_try = [
+                "gemini-1.5-pro",          # VIP Model
+                "gemini-1.5-flash",        # Fast Model
+                "gemini-1.5-pro-latest",   # Beta VIP
+                "gemini-pro"               # Old Reliable (Kabhi fail nahi hota)
+            ]
             
-            res = requests.post(gemini_url, headers={"Content-Type": "application/json"}, json=gemini_payload)
-            res_data = res.json()
+            ai_msg = None
+            last_error = ""
+
+            for model in models_to_try:
+                # v1beta is safest for trying multiple versions
+                gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+                res = requests.post(gemini_url, headers={"Content-Type": "application/json"}, json=gemini_payload)
+                res_data = res.json()
+                
+                if "candidates" in res_data: 
+                    ai_msg = res_data['candidates'][0]['content']['parts'][0]['text']
+                    break # Success! Error ki chain toot gayi, loop se bahar niklo
+                else:
+                    last_error = str(res_data)
+                    continue # Error aaya? Koi baat nahi, chup chap agla model try karo
             
-            if "candidates" in res_data: 
-                ai_msg = res_data['candidates'][0]['content']['parts'][0]['text']
-            else: 
-                return {"error": f"Gemini API Error: {res_data}"}
+            # Agar saare ke saare models fail ho gaye (jo ke namumkin hai)
+            if not ai_msg:
+                return {"error": f"All Gemini Models Failed! Last Error: {last_error}"}
             
             new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_msg)
             if not user.is_pro: user.response_count += 1
@@ -293,7 +311,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             return {"data": ai_msg, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
             
         except Exception as e:
-            return {"error": f"Gemini Route Failed: {str(e)}"}
+            return {"error": f"Gemini Route Failed completely: {str(e)}"}
 
     else:
         # GROQ API LOGIC
