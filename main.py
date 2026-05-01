@@ -264,7 +264,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         contents.append({"role": "user", "parts": [{"text": request.transcript}]})
         
         gemini_payload = {
-            "system_instruction": {"parts": [{"text": system_instr}]},
+            "systemInstruction": {"parts": [{"text": system_instr}]},
             "contents": contents
         }
         
