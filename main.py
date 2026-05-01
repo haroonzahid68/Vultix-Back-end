@@ -272,7 +272,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             if not GEMINI_API_KEY: return {"error": "Gemini API Key is missing on Server"}
             
             # Use Gemini 1.5 Pro for VIP Users, Flash for Free Users (Both are incredibly smart)
-            model_name = "gemini-1.5-pro-latest" if user.is_pro else "gemini-1.5-flash-latest"
+            model_name = "gemini-2.5-pro-preview-05-06" if user.is_pro else "gemini-2.0-flash-latest"
             gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             
             res = requests.post(gemini_url, headers={"Content-Type": "application/json"}, json=gemini_payload)
