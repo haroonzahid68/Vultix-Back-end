@@ -359,6 +359,19 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             return {"error": error_msg}
 
 # === ADMIN APIS ===
+
+# === ADMIN: VIEW FULL USER CHAT HISTORY ===
+@app.get("/admin/user_full_history/{user_id}")
+async def get_admin_user_history(user_id: int, db: Session = Depends(get_db), x_admin_key: str = Header(...)):
+    # Pehle admin key verify karein
+    if x_admin_key != ADMIN_MASTER_KEY:
+        raise HTTPException(status_code=403, detail="ACCESS_DENIED")
+    
+    # User ki saari chats nikaalein
+    chats = db.query(Chat).filter(Chat.user_id == user_id).order_by(Chat.timestamp.desc()).all()
+    
+    return {"chats": [{"message": c.message, "response": c.response, "timestamp": c.timestamp} for c in chats]}
+
 @app.get("/history/{user_id}")
 async def get_user_history(user_id: int, db: Session = Depends(get_db)):
     chats = db.query(Chat).filter(Chat.user_id == user_id).order_by(Chat.timestamp.desc()).all()
