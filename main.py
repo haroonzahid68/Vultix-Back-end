@@ -273,7 +273,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             
             # Use Gemini 1.5 Pro for VIP Users, Flash for Free Users (Both are incredibly smart)
             model_name = "gemini-1.5-pro" if user.is_pro else "gemini-1.5-flash"
-            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            gemini_url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             
             res = requests.post(gemini_url, headers={"Content-Type": "application/json"}, json=gemini_payload)
             res_data = res.json()
