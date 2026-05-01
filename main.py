@@ -29,12 +29,12 @@ HF_API_KEY = os.getenv("HF_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "ceo123")
 
-# 🚀 NEW KEYS FOR SAAS MONETIZATION & DEEPSEEK
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+# 🚀 NEW KEYS FOR SAAS MONETIZATION & MULTI-LLM
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # NEW: For Coding Engine
 LEMON_API_KEY = os.getenv("LEMON_API_KEY")
 LEMON_WEBHOOK_SECRET = os.getenv("LEMON_WEBHOOK_SECRET")
 LEMON_STORE_ID = os.getenv("LEMON_STORE_ID")
-LEMON_VARIANT_ID = os.getenv("LEMON_VARIANT_ID") # Jo product user buy karega
+LEMON_VARIANT_ID = os.getenv("LEMON_VARIANT_ID")
 
 # === DATABASE SETUP ===
 if DATABASE_URL and DATABASE_URL.startswith("sqlite"):
@@ -54,7 +54,7 @@ class User(Base):
     last_reset_time = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
     is_banned = Column(Boolean, default=False)
-    is_pro = Column(Boolean, default=False) # 💎 NEW: Premium Status
+    is_pro = Column(Boolean, default=False)
 
 class Chat(Base):
     __tablename__ = "chats"
@@ -143,7 +143,6 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
         raise HTTPException(status_code=400, detail=f"Google Login Failed: {str(e)}")
 
 # === 💳 SAAS MONETIZATION: LEMON SQUEEZY APIS ===
-
 @app.post("/create-checkout")
 async def create_checkout(request: CheckoutRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == request.user_id).first()
@@ -165,7 +164,7 @@ async def create_checkout(request: CheckoutRequest, db: Session = Depends(get_db
                 "checkout_data": {
                     "email": user.username if "@" in user.username else f"{user.username}@vultix.com",
                     "name": user.full_name,
-                    "custom": { "user_id": str(user.id) } # Ye webhook mein wapas aayega
+                    "custom": { "user_id": str(user.id) }
                 }
             },
             "relationships": {
@@ -185,7 +184,6 @@ async def create_checkout(request: CheckoutRequest, db: Session = Depends(get_db
 
 @app.post("/webhook")
 async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
-    # Verify Webhook Signature for Security
     signature = request.headers.get("X-Signature")
     body = await request.body()
     
@@ -196,27 +194,25 @@ async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
     data = json.loads(body)
     event_name = data["meta"]["event_name"]
     
-    # Check if payment was successful
     if event_name in ["order_created", "subscription_created"]:
         custom_data = data["data"]["attributes"]["custom_data"]
         user_id = int(custom_data.get("user_id", 0))
         
         user = db.query(User).filter(User.id == user_id).first()
         if user:
-            user.is_pro = True # 💎 Upgrade User in DB!
+            user.is_pro = True 
             db.commit()
             
     return {"status": "success"}
 
 # === 🧠 MULTI-LLM CORE ENGINE ===
-
 @app.post("/process")
 async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == request.user_id).first()
     if not user: return {"error": "User missing!"}
     if user.is_banned: return {"error": "ACCOUNT_BANNED"}
 
-    # Limit Checking (Skip if PRO)
+    # Limit Checking
     now = datetime.utcnow()
     if not user.last_reset_time: user.last_reset_time = now
     if (now - user.last_reset_time).total_seconds() > 86400:
@@ -227,7 +223,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     if not user.is_pro and user.response_count >= 50: 
         return {"error": "LIMIT_REACHED"}
 
-    # 🎨 IMAGE GENERATION LOGIC (Image Studio)
+    # 🎨 IMAGE GENERATION LOGIC
     if request.task == "image":
         if request.image_engine == "hd":
             if not user.is_pro: return {"error": "PRO_FEATURE"}
@@ -253,29 +249,39 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         db.commit()
         return {"data": ai_response, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
 
-    # 🚀 SMART ROUTER: DEEPSEEK FOR CODING, GROQ FOR REST
     history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(4).all()
     
     if request.task == "coding":
-        # DEEPSEEK API LOGIC
+        # 🚀 GOOGLE GEMINI API LOGIC FOR CODING
         system_instr = "ROLE: Senior 10x Software Engineer & Elite Academic Logic Expert. CRITICAL RULE: When writing C++ code or providing solutions, strictly align with academic requirements. You must use precise logic structures and exact naming conventions as required for strict academic integrity. Absolutely NO code comments in generated code unless explicitly needed to explain a required logic structure. Output ONLY raw, clean logic."
         
-        messages = [{"role": "system", "content": system_instr}]
+        # Format history for Gemini
+        contents = []
         for h in reversed(history):
-            messages.append({"role": "user", "content": h.message})
-            messages.append({"role": "assistant", "content": h.response})
-        messages.append({"role": "user", "content": request.transcript})
+            contents.append({"role": "user", "parts": [{"text": h.message}]})
+            contents.append({"role": "model", "parts": [{"text": h.response}]})
+        
+        contents.append({"role": "user", "parts": [{"text": request.transcript}]})
+        
+        gemini_payload = {
+            "system_instruction": {"parts": [{"text": system_instr}]},
+            "contents": contents
+        }
         
         try:
-            if not DEEPSEEK_API_KEY: return {"error": "DeepSeek API Key is missing on Server"}
-            ds_headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
-            ds_payload = {"model": "deepseek-chat", "messages": messages}
+            if not GEMINI_API_KEY: return {"error": "Gemini API Key is missing on Server"}
             
-            res = requests.post("https://api.deepseek.com/chat/completions", headers=ds_headers, json=ds_payload)
+            # Use Gemini 1.5 Pro for VIP Users, Flash for Free Users (Both are incredibly smart)
+            model_name = "gemini-1.5-pro-latest" if user.is_pro else "gemini-1.5-flash-latest"
+            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            
+            res = requests.post(gemini_url, headers={"Content-Type": "application/json"}, json=gemini_payload)
             res_data = res.json()
             
-            if "choices" in res_data: ai_msg = res_data['choices'][0]['message']['content']
-            else: return {"error": f"DeepSeek Error: {res_data}"}
+            if "candidates" in res_data: 
+                ai_msg = res_data['candidates'][0]['content']['parts'][0]['text']
+            else: 
+                return {"error": f"Gemini API Error: {res_data}"}
             
             new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_msg)
             if not user.is_pro: user.response_count += 1
@@ -284,27 +290,25 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             return {"data": ai_msg, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
             
         except Exception as e:
-            return {"error": f"DeepSeek Route Failed: {str(e)}"}
+            return {"error": f"Gemini Route Failed: {str(e)}"}
 
     else:
-        # GROQ API LOGIC (Friendly, Study, Viral, Vision)
+        # GROQ API LOGIC
         model_to_use = "llama-3.3-70b-versatile" if request.selected_model == "llama-3.3-70b-versatile" else "llama-3.1-8b-instant"
         
-        # PRO Check for 70B
         if model_to_use == "llama-3.3-70b-versatile" and not user.is_pro:
             return {"error": "PRO_FEATURE"}
         
-        # VISION AI OVERRIDE WITH SMART FALLBACK 🧠
         if request.image_data:
             model_to_use = "llama-3.2-90b-vision-instruct"
 
         task_rules = ""
         if request.task == "viral":
-            task_rules = "ROLE: Elite YouTube & Social Media Viral Strategist. FOCUS: US & UK Audiences. Generate highly engaging scripts, 3-second hooks, and storytelling prompts."
+            task_rules = "ROLE: Elite YouTube & Social Media Viral Strategist. FOCUS: US & UK Audiences."
         elif request.task == "study":
-            task_rules = "ROLE: Academic Speedster & Task Optimizer. CRITICAL RULE: For multiple-choice quizzes or translations, provide ONLY the direct letter answer (e.g., 'a', 'b', 'c') with ZERO detailed analysis."
+            task_rules = "ROLE: Academic Speedster. CRITICAL RULE: For MCQs, provide ONLY the direct letter answer."
         else:
-            task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Use casual Pakistani Roman Urdu mixed with English words. Keep technical terms in English. TONE: Sarcastic, use emojis (🔥, 💀, 🚀, 😂)."
+            task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Use casual Pakistani Roman Urdu mixed with English words. TONE: Sarcastic, use emojis."
 
         creator_info = "If anyone asks who created you, state that you are Vultix AI, developed by Muhammad Haroon Zahid, an IT entrepreneur from Bahawalpur."
         system_instr = f"You are Vultix AI, a premium SaaS assistant.\n{creator_info}\n{task_rules}"
@@ -332,7 +336,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             
         except Exception as e: 
             error_msg = str(e)
-            if "model_decommissioned" in error_msg or "model_not_found" in error_msg and request.image_data:
+            if "model_not_found" in error_msg and request.image_data:
                 try:
                     fallback_model = "llama-3.2-11b-vision-instruct"
                     res = client.chat.completions.create(model=fallback_model, messages=messages)
@@ -348,7 +352,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
                     return {"error": f"Vision API Issue: Check active model names. Details: {str(inner_e)}"}
             return {"error": error_msg}
 
-# === ADMIN APIS (Untouched) ===
+# === ADMIN APIS ===
 @app.get("/history/{user_id}")
 async def get_user_history(user_id: int, db: Session = Depends(get_db)):
     chats = db.query(Chat).filter(Chat.user_id == user_id).order_by(Chat.timestamp.desc()).all()
@@ -395,11 +399,6 @@ async def get_admin_users(db: Session = Depends(get_db), _: None = Depends(verif
         })
     return {"users": user_list}
 
-@app.get("/admin/chats/{user_id}")
-async def get_admin_user_chats(user_id: int, db: Session = Depends(get_db), _: None = Depends(verify_admin)):
-    chats = db.query(Chat).filter(Chat.user_id == user_id).order_by(Chat.timestamp.asc()).all()
-    return {"chats": [{"message": c.message, "response": c.response, "timestamp": c.timestamp} for c in chats]}
-
 @app.post("/admin/toggle_ban/{user_id}")
 async def toggle_user_ban(user_id: int, db: Session = Depends(get_db), _: None = Depends(verify_admin)):
     user = db.query(User).filter(User.id == user_id).first()
@@ -412,11 +411,8 @@ async def toggle_user_ban(user_id: int, db: Session = Depends(get_db), _: None =
 async def toggle_user_pro(user_id: int, db: Session = Depends(get_db), _: None = Depends(verify_admin)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user: raise HTTPException(status_code=404, detail="User not found")
-    
-    # User ka current status ulta kar do (Free hai toh Pro, Pro hai toh Free)
     user.is_pro = not user.is_pro
     db.commit()
-    
     return {"message": "Premium status updated", "is_pro": user.is_pro}
 
 if __name__ == "__main__":
