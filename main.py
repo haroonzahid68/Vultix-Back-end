@@ -284,7 +284,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             if not GEMINI_API_KEY: return {"error": "Gemini API Key is missing on Server"}
             
             # The SDK automatically handles URLs, Versions, and Payloads safely!
-            model_name = "gemini-1.5-pro" if user.is_pro else "gemini-1.5-flash"
+            model_name = "gemini-1.5-flash" if user.is_pro else "gemini-1.5-flash-latest"
             model = genai.GenerativeModel(model_name)
             
             # Start chat with history and send the new prompt
