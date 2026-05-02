@@ -8,11 +8,11 @@ import time
 import hmac
 import hashlib
 import json
-import google.generativeai as genai
+import logging
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
+from fastapi import FastAPI, HTTPException, Depends, Header, Request, UploadFile, File, Form
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
 from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, DateTime, Boolean
@@ -22,31 +22,52 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from tavily import TavilyClient
 
+# RAG specific imports
+try:
+    import PyPDF2
+    import io
+    import numpy as np
+    import faiss
+    RAG_ENABLED = True
+except ImportError:
+    RAG_ENABLED = False
+    print("WARNING: RAG modules (PyPDF2, numpy, faiss) not found. Document upload will be disabled.")
+
+import google.generativeai as genai
+
+# === LOGGING SETUP ===
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("VultixCore")
+
 # === ENVIRONMENT VARIABLES ===
 GOOGLE_CLIENT_ID = "1040604821889-nlp7drjmimem7p2ldh1bkhkepp9f1hii.apps.googleusercontent.com"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 HF_API_KEY = os.getenv("HF_API_KEY")
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./vultix_core.db")
 ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "ceo123")
 
 # 🚀 NEW KEYS FOR SAAS MONETIZATION & MULTI-LLM
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # NEW: For Coding Engine
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+else:
+    logger.warning("GEMINI_API_KEY is not set. Coding mode will fail.")
+
 LEMON_API_KEY = os.getenv("LEMON_API_KEY")
 LEMON_WEBHOOK_SECRET = os.getenv("LEMON_WEBHOOK_SECRET")
 LEMON_STORE_ID = os.getenv("LEMON_STORE_ID")
 LEMON_VARIANT_ID = os.getenv("LEMON_VARIANT_ID")
 
 # === DATABASE SETUP ===
-if DATABASE_URL and DATABASE_URL.startswith("sqlite"):
+if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
     engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# === DATABASE MODELS ===
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -68,14 +89,36 @@ class Chat(Base):
     response = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
+class Document(Base):
+    __tablename__ = "documents"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    filename = Column(String)
+    content = Column(Text)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+
 Base.metadata.create_all(bind=engine)
 
 # === FASTAPI APP ===
-app = FastAPI(title="Vultix AI Core Engine")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="Vultix AI Pro SaaS Engine", version="3.2.0")
 
-client = Groq(api_key=GROQ_API_KEY)
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
+# CORS Middleware Setup
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=["*"], 
+    allow_credentials=True, 
+    allow_methods=["*"], 
+    allow_headers=["*"]
+)
+
+# API Clients Initialization
+if GROQ_API_KEY:
+    client = Groq(api_key=GROQ_API_KEY)
+else:
+    logger.error("GROQ_API_KEY is missing!")
+
+if TAVILY_API_KEY:
+    tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 # === PYDANTIC MODELS ===
 class AuthRequest(BaseModel):
@@ -94,14 +137,18 @@ class ChatRequest(BaseModel):
     selected_model: str = "auto"
     image_engine: str = "fast"
     image_data: Optional[str] = None
+    use_rag: Optional[bool] = False # Flag to tell system to use uploaded documents
 
 class CheckoutRequest(BaseModel):
     user_id: int
 
+# === DEPENDENCIES ===
 def get_db():
     db = SessionLocal()
-    try: yield db
-    finally: db.close()
+    try: 
+        yield db
+    finally: 
+        db.close()
 
 def verify_admin(x_admin_key: str = Header(...)):
     if x_admin_key != ADMIN_MASTER_KEY:
@@ -116,6 +163,7 @@ async def signup(request: AuthRequest, db: Session = Depends(get_db)):
     new_user = User(full_name=request.full_name, username=request.username, hashed_password=hashed_pw)
     db.add(new_user)
     db.commit()
+    logger.info(f"New user signed up: {request.username}")
     return {"message": "Success"}
 
 @app.post("/login")
@@ -143,13 +191,15 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
             raise HTTPException(status_code=403, detail="ACCOUNT_BANNED")
         return {"user_id": user.id, "username": user.username, "full_name": user.full_name, "is_pro": user.is_pro}
     except Exception as e:
+        logger.error(f"Google Login Failed: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Google Login Failed: {str(e)}")
 
 # === 💳 SAAS MONETIZATION: LEMON SQUEEZY APIS ===
 @app.post("/create-checkout")
 async def create_checkout(request: CheckoutRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == request.user_id).first()
-    if not user: return {"error": "User not found"}
+    if not user: 
+        return {"error": "User not found"}
     
     if not LEMON_API_KEY or not LEMON_STORE_ID or not LEMON_VARIANT_ID:
         return {"error": "Payment Gateway Configuration Missing in Environment"}
@@ -181,8 +231,10 @@ async def create_checkout(request: CheckoutRequest, db: Session = Depends(get_db
         res = requests.post("https://api.lemonsqueezy.com/v1/checkouts", headers=headers, json=payload)
         res_data = res.json()
         checkout_url = res_data["data"]["attributes"]["url"]
+        logger.info(f"Checkout created for user {user.id}")
         return {"checkout_url": checkout_url}
     except Exception as e:
+        logger.error(f"Checkout Failed: {str(e)}")
         return {"error": str(e)}
 
 @app.post("/webhook")
@@ -205,8 +257,70 @@ async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
         if user:
             user.is_pro = True 
             db.commit()
+            logger.info(f"User {user_id} upgraded to PRO via Webhook.")
             
     return {"status": "success"}
+
+# === 🧠 KNOWLEDGE VAULT: RAG SYSTEM (Retrieval-Augmented Generation) ===
+@app.post("/upload-document")
+async def upload_document(
+    user_id: int = Form(...), 
+    file: UploadFile = File(...), 
+    db: Session = Depends(get_db)
+):
+    if not RAG_ENABLED:
+        return {"error": "RAG Server Dependencies Missing. Install PyPDF2, numpy, faiss-cpu"}
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return {"error": "User not found"}
+    
+    if not file.filename.endswith('.pdf'):
+        return {"error": "Only PDF files are supported currently."}
+        
+    try:
+        # Extract text from PDF
+        pdf_content = await file.read()
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_content))
+        
+        extracted_text = ""
+        for page in pdf_reader.pages:
+            text = page.extract_text()
+            if text:
+                extracted_text += text + "\n"
+        
+        # Save to Database for context retrieval later
+        new_doc = Document(user_id=user_id, filename=file.filename, content=extracted_text)
+        db.add(new_doc)
+        db.commit()
+        
+        return {"message": f"Document '{file.filename}' processed successfully and saved to Knowledge Vault.", "doc_id": new_doc.id}
+    except Exception as e:
+        logger.error(f"Document processing failed: {str(e)}")
+        return {"error": f"Failed to process document: {str(e)}"}
+
+def get_rag_context(user_id: int, query: str, db: Session) -> str:
+    """Helper function to fetch relevant text from DB based on simple keyword search (Lightweight RAG)"""
+    docs = db.query(Document).filter(Document.user_id == user_id).order_by(Document.uploaded_at.desc()).limit(2).all()
+    if not docs:
+        return ""
+    
+    context_chunks = []
+    for doc in docs:
+        # Very lightweight chunking for Render server safety
+        chunks = [doc.content[i:i+1500] for i in range(0, len(doc.content), 1500)]
+        for chunk in chunks:
+            # Simple keyword matching heuristic
+            keywords = [w.lower() for w in query.split() if len(w) > 4]
+            if any(k in chunk.lower() for k in keywords):
+                context_chunks.append(chunk)
+                if len(context_chunks) > 2: # Keep context size manageable for LLM
+                    break
+                    
+    if context_chunks:
+        joined_context = "\n...".join(context_chunks)
+        return f"\n\n[RELEVANT VAULT DOCUMENT FRAGMENTS]:\n{joined_context}\n[END FRAGMENTS. Use this context to answer if relevant.]\n"
+    return ""
 
 # === 🧠 MULTI-LLM CORE ENGINE ===
 @app.post("/process")
@@ -215,7 +329,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     if not user: return {"error": "User missing!"}
     if user.is_banned: return {"error": "ACCOUNT_BANNED"}
 
-    # Limit Checking
+    # Limit Checking Logic
     now = datetime.utcnow()
     if not user.last_reset_time: user.last_reset_time = now
     if (now - user.last_reset_time).total_seconds() > 86400:
@@ -226,32 +340,33 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     if not user.is_pro and user.response_count >= 50: 
         return {"error": "LIMIT_REACHED"}
 
+    # =========================================================================
     # 🎨 IMAGE GENERATION LOGIC WITH ASPECT RATIO
+    # =========================================================================
     if request.task == "image":
-        # Default sizes
-        width, height = 1024, 1024 # Square
+        width, height = 1024, 1024 # Default Square
         
-        # Check aspect ratio from request (Hum isay 'task' ya 'image_engine' ke sath bhej sakte hain)
-        # For simplicity, let's assume 'selected_model' field carries the ratio for images
+        # Check aspect ratio
         ratio = request.selected_model 
-        
-        if ratio == "16:9": # YouTube / Landscape
+        if ratio == "16:9":
             width, height = 1280, 720
-        elif ratio == "9:16": # TikTok / Reels / Portrait
+        elif ratio == "9:16":
             width, height = 720, 1280
 
         if request.image_engine == "hd":
             if not user.is_pro: return {"error": "PRO_FEATURE"}
             API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
             headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-            # HD Engine automatically handles aspect ratios well
-            response = requests.post(API_URL, headers=headers, json={"inputs": request.transcript})
-            if response.status_code == 200:
-                img_data = base64.b64encode(response.content).decode("utf-8")
-                ai_response = f"![Generated Image](data:image/png;base64,{img_data})"
-            else: ai_response = "HF Engine is warming up. Please try again! ⏳"
+            try:
+                response = requests.post(API_URL, headers=headers, json={"inputs": request.transcript}, timeout=30)
+                if response.status_code == 200:
+                    img_data = base64.b64encode(response.content).decode("utf-8")
+                    ai_response = f"![Generated Image](data:image/png;base64,{img_data})"
+                else: 
+                    ai_response = "HF Engine is warming up or busy. Please try again in a few seconds! ⏳"
+            except Exception as e:
+                ai_response = f"Image Generation failed: {str(e)}"
         else:
-            # Fast Engine (Pollinations) with dynamic width/height
             VIP_STYLE_ENHANCERS = ", volumetric lighting, 8k resolution, photorealistic, cinematic quality."
             cleaned_prompt = request.transcript.strip()[:200]
             encoded_prompt = urllib.parse.quote(cleaned_prompt + VIP_STYLE_ENHANCERS)
@@ -265,99 +380,109 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         db.commit()
         return {"data": ai_response, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
 
-    history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(4).all()
-    
+    # Retrieve RAG Context if Study Mode is active
+    rag_context = ""
+    if request.task == "study" and RAG_ENABLED:
+        rag_context = get_rag_context(user_id=user.id, query=request.transcript, db=db)
+
+    # =========================================================================
+    # 👨‍💻 CODING LOGIC (GOOGLE GEMINI)
+    # =========================================================================
     if request.task == "coding":
-        # 🚀 GOOGLE GEMINI OFFICIAL SDK LOGIC FOR CODING
-        system_instr = "ROLE: Senior 10x Software Engineer & Elite Academic Logic Expert. CRITICAL RULE: When writing C++ code or providing solutions, strictly align with academic requirements. You must use precise logic structures and exact naming conventions as required for strict academic integrity. Absolutely NO code comments in generated code unless explicitly needed to explain a required logic structure. Output ONLY raw, clean logic."
-        
-        # Format history for Gemini SDK (Requires 'user' and 'model' roles)
-        gemini_history = []
-        for h in reversed(history):
-            gemini_history.append({"role": "user", "parts": [h.message]})
-            gemini_history.append({"role": "model", "parts": [h.response]})
-        
-        # 🔥 Inject System Rules invisibly into the prompt
-        final_prompt = f"[{system_instr}]\n\nUser Request: {request.transcript}"
-        
+        # 🛡️ THE TRY-EXCEPT BLOCK FIXED AND INDENTED PROPERLY
         try:
-            if not GEMINI_API_KEY: return {"error": "Gemini API Key is missing on Server"}
+            if not GEMINI_API_KEY: 
+                return {"error": "Gemini API Key is missing on Server. Configure GEMINI_API_KEY."}
 
-        # The SDK automatically handles URLs, Versions, and Payloads safely!
-        
-        model = genai.GenerativeModel("gemini-2.5-flash")
+            system_instr = "ROLE: Senior 10x Software Engineer & Elite Academic Logic Expert. CRITICAL RULE: When writing C++ code or providing solutions, strictly align with academic requirements. Absolutely NO code comments in generated code unless explicitly requested. Output ONLY raw, clean logic."
+            
+            # 🚀 GROQ LIMIT FIX: Trim history to last 2 conversations (4 messages) to save Tokens
+            history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(2).all()
+            
+            gemini_history = []
+            for h in reversed(history):
+                gemini_history.append({"role": "user", "parts": [h.message]})
+                gemini_history.append({"role": "model", "parts": [h.response]})
+            
+            # Using stable gemini-1.5-flash which is widely supported
+            model = genai.GenerativeModel("gemini-1.5-flash")
 
-        # Start chat with history and send the new prompt
-        chat_session = model.start_chat(history=gemini_history)
+            final_prompt = f"[{system_instr}]\n\nUser Request: {request.transcript}"
             
             # Start chat with history and send the new prompt
             chat_session = model.start_chat(history=gemini_history)
             res = chat_session.send_message(final_prompt)
-            
             ai_msg = res.text
             
             new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_msg)
             if not user.is_pro: user.response_count += 1
             db.add(new_chat)
             db.commit()
+            
             return {"data": ai_msg, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
             
         except Exception as e:
-            return {"error": f"Gemini SDK Core Failed: {str(e)}"}
-            
-            new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_msg)
-            if not user.is_pro: user.response_count += 1
-            db.add(new_chat)
-            db.commit()
-            return {"data": ai_msg, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
-            
-        except Exception as e:
-            return {"error": f"Gemini Route Failed completely: {str(e)}"}
+            logger.error(f"Gemini Engine Failed: {str(e)}")
+            return {"error": f"Gemini Route Failed: {str(e)}. Try switching modes."}
 
+    # =========================================================================
+    # 🧠 GENERAL/VIRAL/STUDY LOGIC (GROQ API with LIMIT BYPASS)
+    # =========================================================================
     else:
-        # GROQ API LOGIC
-        model_to_use = "llama-3.3-70b-versatile" if request.selected_model == "llama-3.3-70b-versatile" else "llama-3.1-8b-instant"
-        
-        if model_to_use == "llama-3.3-70b-versatile" and not user.is_pro:
-            return {"error": "PRO_FEATURE"}
-        
-        if request.image_data:
-            model_to_use = "llama-3.2-90b-vision-instruct"
-
-        task_rules = ""
-        if request.task == "viral":
-            task_rules = "ROLE: Elite YouTube & Social Media Viral Strategist. FOCUS: US & UK Audiences."
-        elif request.task == "study":
-            task_rules = "ROLE: Academic Speedster. CRITICAL RULE: For MCQs, provide ONLY the direct letter answer."
-        else:
-            task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Use casual Pakistani Roman Urdu mixed with English words. TONE: Sarcastic, use emojis."
-
-        creator_info = "If anyone asks who created you, state that you are Vultix AI, developed by Muhammad Haroon Zahid, an IT entrepreneur from Bahawalpur."
-        system_instr = f"You are Vultix AI, a premium SaaS assistant.\n{creator_info}\n{task_rules}"
-
-        messages = [{"role": "system", "content": system_instr}]
-        for h in reversed(history):
-            messages.append({"role": "user", "content": h.message})
-            messages.append({"role": "assistant", "content": h.response})
-
-        if request.image_data:
-            messages.append({"role": "user", "content": [{"type": "text", "text": request.transcript}, {"type": "image_url", "image_url": {"url": request.image_data}}]})
-        else:
-            messages.append({"role": "user", "content": request.transcript})
-
         try:
+            model_to_use = "llama-3.3-70b-versatile" if request.selected_model == "llama-3.3-70b-versatile" else "llama-3.1-8b-instant"
+            
+            if model_to_use == "llama-3.3-70b-versatile" and not user.is_pro:
+                return {"error": "PRO_FEATURE"}
+            
+            if request.image_data:
+                model_to_use = "llama-3.2-90b-vision-instruct"
+
+            task_rules = ""
+            if request.task == "viral":
+                task_rules = "ROLE: Elite YouTube & Social Media Viral Strategist. FOCUS: US & UK Audiences. Create highly engaging hooks and content."
+            elif request.task == "study":
+                task_rules = "ROLE: Academic Speedster. CRITICAL RULE: For MCQs, provide ONLY the direct letter answer (e.g., 'a', 'b', 'c')."
+            else:
+                task_rules = "ROLE: Best friend and supportive AI. TONE: Friendly, helpful, use Pakistani Roman Urdu mixed with English words."
+
+            creator_info = "If anyone asks who created you, state that you are Vultix AI, developed by Muhammad Haroon Zahid, an IT entrepreneur from Bahawalpur."
+            system_instr = f"You are Vultix AI, a premium SaaS assistant.\n{creator_info}\n{task_rules}"
+
+            messages = [{"role": "system", "content": system_instr}]
+            
+            # 🚀 GROQ LIMIT FIX: Trim history to last 1 conversation to prevent 429 Too Many Tokens error
+            history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(1).all()
+            for h in reversed(history):
+                messages.append({"role": "user", "content": h.message})
+                messages.append({"role": "assistant", "content": h.response})
+
+            # Append RAG Context if it exists
+            final_user_transcript = request.transcript + rag_context
+
+            if request.image_data:
+                messages.append({"role": "user", "content": [{"type": "text", "text": final_user_transcript}, {"type": "image_url", "image_url": {"url": request.image_data}}]})
+            else:
+                messages.append({"role": "user", "content": final_user_transcript})
+
+            # First Attempt with Groq
             res = client.chat.completions.create(model=model_to_use, messages=messages)
             ai_msg = res.choices[0].message.content
             
             db_message = f"[Sent an Image] {request.transcript}" if request.image_data else request.transcript
             new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=db_message, response=ai_msg)
+            
             if not user.is_pro: user.response_count += 1
             db.add(new_chat)
             db.commit()
+            
             return {"data": ai_msg, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
             
         except Exception as e: 
             error_msg = str(e)
+            logger.error(f"Groq Route Error: {error_msg}")
+            
+            # Vision Model Fallback
             if "model_not_found" in error_msg and request.image_data:
                 try:
                     fallback_model = "llama-3.2-11b-vision-instruct"
@@ -371,21 +496,21 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
                     db.commit()
                     return {"data": ai_msg, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
                 except Exception as inner_e:
-                    return {"error": f"Vision API Issue: Check active model names. Details: {str(inner_e)}"}
+                    return {"error": f"Vision API Issue: {str(inner_e)}"}
+            
+            # Rate Limit Fallback Bypass
+            if "rate_limit_exceeded" in error_msg.lower() or "429" in error_msg:
+                return {"error": "Groq Rate Limit Exceeded. System is cooling down. Please use Coding Mode (Gemini Engine) for a few minutes!"}
+                
             return {"error": error_msg}
 
 # === ADMIN APIS ===
 
-# === ADMIN: VIEW FULL USER CHAT HISTORY ===
 @app.get("/admin/user_full_history/{user_id}")
 async def get_admin_user_history(user_id: int, db: Session = Depends(get_db), x_admin_key: str = Header(...)):
-    # Pehle admin key verify karein
     if x_admin_key != ADMIN_MASTER_KEY:
         raise HTTPException(status_code=403, detail="ACCESS_DENIED")
-    
-    # User ki saari chats nikaalein
     chats = db.query(Chat).filter(Chat.user_id == user_id).order_by(Chat.timestamp.desc()).all()
-    
     return {"chats": [{"message": c.message, "response": c.response, "timestamp": c.timestamp} for c in chats]}
 
 @app.get("/history/{user_id}")
