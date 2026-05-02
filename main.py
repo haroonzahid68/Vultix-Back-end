@@ -9,7 +9,6 @@ import hmac
 import hashlib
 import json
 import logging
-import wikipedia
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, UploadFile, File, Form
 from pydantic import BaseModel
@@ -23,7 +22,9 @@ from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 from tavily import TavilyClient
 
-# RAG specific imports
+# =========================================================================
+# 📦 EXTERNAL LIBRARIES & MODULE CHECKOUT (RAG & WEB SEARCH)
+# =========================================================================
 try:
     import PyPDF2
     import io
@@ -32,9 +33,8 @@ try:
     RAG_ENABLED = True
 except ImportError:
     RAG_ENABLED = False
-    print("WARNING: RAG modules (PyPDF2, numpy, faiss) not found. Document upload will be disabled.")
+    print("WARNING: RAG modules (PyPDF2, numpy, faiss) not found. Document upload disabled.")
 
-# Web Search specific imports
 try:
     from duckduckgo_search import DDGS
     DDGS_ENABLED = True
@@ -42,13 +42,15 @@ except ImportError:
     DDGS_ENABLED = False
     print("WARNING: duckduckgo-search module not found. Tier 1 Web Search disabled.")
 
+import wikipedia 
 import google.generativeai as genai
 
-# === LOGGING SETUP ===
-logging.basicConfig(level=logging.INFO)
+# =========================================================================
+# ⚙️ LOGGING & ENVIRONMENT SETUP
+# =========================================================================
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("VultixCore")
 
-# === ENVIRONMENT VARIABLES ===
 GOOGLE_CLIENT_ID = "1040604821889-nlp7drjmimem7p2ldh1bkhkepp9f1hii.apps.googleusercontent.com"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -56,10 +58,11 @@ HF_API_KEY = os.getenv("HF_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./vultix_core.db")
 ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "ceo123")
 
-# 🚀 NEW KEYS FOR SAAS MONETIZATION, MULTI-LLM & SEARCH
+# 🚀 MULTI-LLM & MONETIZATION KEYS
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+    logger.info("Gemini Engine configured successfully for Coding Mode.")
 else:
     logger.warning("GEMINI_API_KEY is not set. Coding mode will fail.")
 
@@ -68,12 +71,12 @@ LEMON_WEBHOOK_SECRET = os.getenv("LEMON_WEBHOOK_SECRET")
 LEMON_STORE_ID = os.getenv("LEMON_STORE_ID")
 LEMON_VARIANT_ID = os.getenv("LEMON_VARIANT_ID")
 
-# Web Search APIs
-BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 GOOGLE_SEARCH_API_KEY = os.getenv("GOOGLE_SEARCH_API_KEY")
 GOOGLE_SEARCH_CX = os.getenv("GOOGLE_SEARCH_CX")
 
-# === DATABASE SETUP ===
+# =========================================================================
+# 🗄️ DATABASE ARCHITECTURE & MODELS
+# =========================================================================
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
@@ -81,7 +84,6 @@ else:
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# === DATABASE MODELS ===
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -111,12 +113,23 @@ class Document(Base):
     content = Column(Text)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
+class Feedback(Base):
+    """New table to store thumbs up / down reactions for specific chat responses"""
+    __tablename__ = "feedbacks"
+    id = Column(Integer, primary_key=True, index=True)
+    chat_id = Column(Integer, ForeignKey("chats.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    is_positive = Column(Boolean) # True for Upvote, False for Downvote
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+# Ensure all tables are created
 Base.metadata.create_all(bind=engine)
 
-# === FASTAPI APP ===
-app = FastAPI(title="Vultix AI Pro SaaS Engine", version="3.3.0")
+# =========================================================================
+# 🚀 FASTAPI APP INITIALIZATION
+# =========================================================================
+app = FastAPI(title="Vultix AI Enterprise Engine", version="4.5.0", description="Developed by Muhammad Haroon Zahid")
 
-# CORS Middleware Setup
 app.add_middleware(
     CORSMiddleware, 
     allow_origins=["*"], 
@@ -128,13 +141,16 @@ app.add_middleware(
 # API Clients Initialization
 if GROQ_API_KEY:
     client = Groq(api_key=GROQ_API_KEY)
+    logger.info("Groq client initialized securely.")
 else:
-    logger.error("GROQ_API_KEY is missing!")
+    logger.error("Critical: GROQ_API_KEY is missing! Core chat functions will fail.")
 
 if TAVILY_API_KEY:
     tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
-# === PYDANTIC MODELS ===
+# =========================================================================
+# 🧩 PYDANTIC DATA VALIDATION MODELS
+# =========================================================================
 class AuthRequest(BaseModel):
     full_name: str = "User"
     username: str
@@ -156,7 +172,17 @@ class ChatRequest(BaseModel):
 class CheckoutRequest(BaseModel):
     user_id: int
 
-# === DEPENDENCIES ===
+class FeedbackRequest(BaseModel):
+    chat_id: int
+    user_id: int
+    is_positive: bool
+
+class EnhancePromptRequest(BaseModel):
+    prompt: str
+
+# =========================================================================
+# 🛡️ SECURITY & DEPENDENCY INJECTION
+# =========================================================================
 def get_db():
     db = SessionLocal()
     try: 
@@ -166,27 +192,38 @@ def get_db():
 
 def verify_admin(x_admin_key: str = Header(...)):
     if x_admin_key != ADMIN_MASTER_KEY:
+        logger.warning("Unauthorized access attempt to Admin API")
         raise HTTPException(status_code=403, detail="ACCESS_DENIED")
 
-# === AUTHENTICATION API ===
+# =========================================================================
+# 🔐 AUTHENTICATION ENDPOINTS
+# =========================================================================
 @app.post("/signup")
 async def signup(request: AuthRequest, db: Session = Depends(get_db)):
     if db.query(User).filter(User.username == request.username).first():
+        logger.warning(f"Signup failed: Username {request.username} already taken.")
         raise HTTPException(status_code=400, detail="USERNAME_TAKEN")
+    
     hashed_pw = bcrypt.hashpw(request.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     new_user = User(full_name=request.full_name, username=request.username, hashed_password=hashed_pw)
+    
     db.add(new_user)
     db.commit()
-    logger.info(f"New user signed up: {request.username}")
+    logger.info(f"New user signed up successfully: {request.username}")
     return {"message": "Success"}
 
 @app.post("/login")
 async def login(request: AuthRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == request.username).first()
+    
     if user and bcrypt.checkpw(request.password.encode('utf-8'), user.hashed_password.encode('utf-8')):
-        if user.is_banned:
+        if user.is_banned: 
+            logger.warning(f"Banned user attempted login: {request.username}")
             raise HTTPException(status_code=403, detail="ACCOUNT_BANNED")
+        logger.info(f"User logged in: {request.username}")
         return {"user_id": user.id, "username": user.username, "full_name": user.full_name, "is_pro": user.is_pro}
+        
+    logger.warning(f"Failed login attempt for: {request.username}")
     raise HTTPException(status_code=401, detail="Invalid Credentials")
 
 @app.post("/google-auth")
@@ -195,28 +232,76 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
         idinfo = id_token.verify_oauth2_token(request.token, google_requests.Request(), GOOGLE_CLIENT_ID)
         email = idinfo['email']
         name = idinfo.get('name', 'Google User')
+        
         user = db.query(User).filter(User.username == email).first()
         if not user:
             user = User(full_name=name, username=email, hashed_password="GOOGLE_VERIFIED_USER")
             db.add(user)
             db.commit()
             db.refresh(user)
-        if user.is_banned:
+            logger.info(f"New user created via Google Auth: {email}")
+            
+        if user.is_banned: 
             raise HTTPException(status_code=403, detail="ACCOUNT_BANNED")
+            
         return {"user_id": user.id, "username": user.username, "full_name": user.full_name, "is_pro": user.is_pro}
     except Exception as e:
-        logger.error(f"Google Login Failed: {str(e)}")
+        logger.error(f"Google Login Failed completely: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Google Login Failed: {str(e)}")
 
-# === 💳 SAAS MONETIZATION: LEMON SQUEEZY APIS ===
+# =========================================================================
+# 🎨 UTILITY ENDPOINTS (ENHANCER & FEEDBACK)
+# =========================================================================
+@app.post("/enhance-prompt")
+async def enhance_prompt(request: EnhancePromptRequest):
+    """Transforms a basic user prompt into a highly detailed Midjourney/SD prompt."""
+    if not GROQ_API_KEY:
+        return {"error": "Groq API Key missing on server configuration."}
+        
+    try:
+        system_msg = "You are an expert prompt engineer for advanced AI image generators like Midjourney and Stable Diffusion. The user will provide a basic concept. You must transform it into a highly detailed, professional, comma-separated image generation prompt. Include specific art styles, lighting settings (e.g., volumetric, cinematic), camera angles, and rendering engines (e.g., Unreal Engine 5, Octane Render). Your response MUST contain ONLY the final enhanced prompt. Do not add conversational text or formatting."
+        
+        logger.info(f"Enhancing prompt: {request.prompt[:30]}...")
+        
+        res = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": f"Enhance this concept: {request.prompt}"}
+            ],
+            temperature=0.7,
+            max_tokens=200
+        )
+        enhanced_text = res.choices[0].message.content.strip()
+        return {"enhanced_prompt": enhanced_text}
+    except Exception as e:
+        logger.error(f"Prompt enhancement failed: {str(e)}")
+        return {"error": f"Enhancement failed: {str(e)}"}
+
+@app.post("/feedback")
+async def submit_feedback(request: FeedbackRequest, db: Session = Depends(get_db)):
+    """Records Thumbs Up / Thumbs Down feedback from users to track AI quality."""
+    chat = db.query(Chat).filter(Chat.id == request.chat_id).first()
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat response not found. Cannot submit feedback.")
+    
+    new_feedback = Feedback(chat_id=request.chat_id, user_id=request.user_id, is_positive=request.is_positive)
+    db.add(new_feedback)
+    db.commit()
+    logger.info(f"Feedback recorded for Chat ID {request.chat_id}: {'Positive' if request.is_positive else 'Negative'}")
+    return {"message": "Feedback recorded successfully!"}
+
+# =========================================================================
+# 💳 SAAS MONETIZATION (LEMON SQUEEZY)
+# =========================================================================
 @app.post("/create-checkout")
 async def create_checkout(request: CheckoutRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == request.user_id).first()
     if not user: 
-        return {"error": "User not found"}
+        return {"error": "User not found in system."}
     
     if not LEMON_API_KEY or not LEMON_STORE_ID or not LEMON_VARIANT_ID:
-        return {"error": "Payment Gateway Configuration Missing in Environment"}
+        return {"error": "Payment Gateway Configuration Missing in Environment Variables."}
 
     headers = {
         "Authorization": f"Bearer {LEMON_API_KEY}",
@@ -245,10 +330,10 @@ async def create_checkout(request: CheckoutRequest, db: Session = Depends(get_db
         res = requests.post("https://api.lemonsqueezy.com/v1/checkouts", headers=headers, json=payload)
         res_data = res.json()
         checkout_url = res_data["data"]["attributes"]["url"]
-        logger.info(f"Checkout created for user {user.id}")
+        logger.info(f"Premium Checkout link generated for user ID: {user.id}")
         return {"checkout_url": checkout_url}
     except Exception as e:
-        logger.error(f"Checkout Failed: {str(e)}")
+        logger.error(f"Checkout Link Generation Failed: {str(e)}")
         return {"error": str(e)}
 
 @app.post("/webhook")
@@ -258,6 +343,7 @@ async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
     
     mac = hmac.new(LEMON_WEBHOOK_SECRET.encode(), msg=body, digestmod=hashlib.sha256)
     if not hmac.compare_digest(mac.hexdigest(), signature):
+        logger.critical("Invalid Webhook Signature detected. Possible intrusion attempt.")
         raise HTTPException(status_code=401, detail="Invalid Webhook Signature")
     
     data = json.loads(body)
@@ -271,48 +357,46 @@ async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
         if user:
             user.is_pro = True 
             db.commit()
-            logger.info(f"User {user_id} upgraded to PRO via Webhook.")
+            logger.info(f"MONETIZATION SUCCESS: User {user_id} upgraded to PRO via Lemon Squeezy Webhook.")
             
     return {"status": "success"}
 
-# === 🌐 WATERFALL WEB SEARCH SYSTEM (DDGS -> BRAVE -> GOOGLE) ===
-    # ADD THIS TO THE TOP OF YOUR FILE WITH OTHER IMPORTS
-
-# ... (rest of your code) ...
-
-# === 🌐 WATERFALL WEB SEARCH SYSTEM (DDGS -> WIKIPEDIA -> GOOGLE) ===
-    def perform_waterfall_search(query: str) -> str:
+# =========================================================================
+# 🌐 WATERFALL WEB SEARCH SYSTEM (Tier 1: DDGS -> Tier 2: Wiki -> Tier 3: Google)
+# =========================================================================
+def perform_waterfall_search(query: str) -> str:
+    """Executes a highly robust, zero-cost fallback search mechanism for real-time AI knowledge."""
     results = []
     
-    # Tier 1: DuckDuckGo (Free, Unlimited) - Made more robust
+    # TIER 1: DuckDuckGo (Free, Unlimited, Live Data)
     try:
         if DDGS_ENABLED:
             logger.info("Attempting Web Search via DuckDuckGo (Tier 1)...")
             with DDGS() as ddgs:
-                # Add a slight delay to prevent DDGS rate limiting
-                time.sleep(1) 
+                time.sleep(1) # Anti-rate limit delay
                 ddgs_results = list(ddgs.text(query, max_results=3))
                 if ddgs_results:
                     for r in ddgs_results:
                         results.append(f"Title: {r.get('title')}\nSnippet: {r.get('body')}")
+                    logger.info("Tier 1 Web Search Successful.")
                     return "\n\n[REAL-TIME WEB DATA (DDGS)]:\n" + "\n---\n".join(results)
     except Exception as e:
-        logger.warning(f"DDGS Failed or Rate Limited: {str(e)}")
+        logger.warning(f"Tier 1 (DDGS) Failed or Rate Limited: {str(e)}")
 
-    # Tier 2: Wikipedia API (100% Free, No Key Required)
+    # TIER 2: Wikipedia API (100% Free, Factual Fallback)
     try:
         logger.info("Attempting Web Search via Wikipedia API (Tier 2)...")
-        # Try to find a relevant page
         wiki_search = wikipedia.search(query, results=1)
         if wiki_search:
             page = wikipedia.page(wiki_search[0])
-            snippet = page.summary[:500] # Get the first 500 characters
+            snippet = page.summary[:600] # Expanded context
             results.append(f"Title: {page.title}\nSnippet: {snippet}...")
+            logger.info("Tier 2 Wikipedia Search Successful.")
             return "\n\n[REAL-TIME WEB DATA (WIKIPEDIA)]:\n" + "\n---\n".join(results)
     except Exception as e:
-        logger.warning(f"Wikipedia Search Failed: {str(e)}")
+        logger.warning(f"Tier 2 (Wikipedia) Search Failed: {str(e)}")
 
-    # Tier 3: Google Custom Search (Last Resort - 100 free/day)
+    # TIER 3: Google Custom Search API (Last Resort, 100 limit)
     try:
         if GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX:
             logger.info("Attempting Web Search via Google Search API (Tier 3)...")
@@ -321,56 +405,58 @@ async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
                 google_data = res.json()
                 for item in google_data.get("items", [])[:3]:
                     results.append(f"Title: {item.get('title')}\nSnippet: {item.get('snippet')}")
+                logger.info("Tier 3 Google Search Successful.")
                 return "\n\n[REAL-TIME WEB DATA (GOOGLE)]:\n" + "\n---\n".join(results)
+            else:
+                logger.error(f"Google API responded with status code: {res.status_code}")
     except Exception as e:
-        logger.warning(f"Google Search Failed: {str(e)}")
+        logger.error(f"Tier 3 (Google) Search completely failed: {str(e)}")
 
-    return "" # No results found or all APIs failed
+    logger.warning("All Web Search Tiers Exhausted. Returning empty context.")
+    return "" 
 
-# === 🧠 KNOWLEDGE VAULT: RAG SYSTEM (Retrieval-Augmented Generation) ===
+# =========================================================================
+# 🧠 KNOWLEDGE VAULT: RAG SYSTEM (Document Upload & Context)
+# =========================================================================
 @app.post("/upload-document")
-async def upload_document(
-    user_id: int = Form(...), 
-    file: UploadFile = File(...), 
-    db: Session = Depends(get_db)
-):
-    if not RAG_ENABLED:
-        return {"error": "RAG Server Dependencies Missing. Install PyPDF2, numpy, faiss-cpu"}
-    
+async def upload_document(user_id: int = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not RAG_ENABLED: 
+        logger.error("RAG upload failed: System dependencies missing.")
+        return {"error": "RAG Server Dependencies Missing. Ensure PyPDF2, numpy, and faiss are installed."}
+        
     user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        return {"error": "User not found"}
-    
-    if not file.filename.endswith('.pdf'):
-        return {"error": "Only PDF files are supported currently."}
+    if not user: 
+        return {"error": "User not found in system."}
+        
+    if not file.filename.endswith('.pdf'): 
+        return {"error": "Invalid format. Only PDF files are supported currently."}
         
     try:
-        # Extract text from PDF
         pdf_content = await file.read()
         pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_content))
         
         extracted_text = ""
-        for page in pdf_reader.pages:
-            text = page.extract_text()
+        for page_num in range(len(pdf_reader.pages)):
+            text = pdf_reader.pages[page_num].extract_text()
             if text:
                 extracted_text += text + "\n"
-        
-        # Save to Database for context retrieval later
+                
         new_doc = Document(user_id=user_id, filename=file.filename, content=extracted_text)
         db.add(new_doc)
         db.commit()
         
-        return {"message": f"Document '{file.filename}' processed successfully and saved to Knowledge Vault.", "doc_id": new_doc.id}
+        logger.info(f"Knowledge Vault updated. Document '{file.filename}' processed for User {user_id}")
+        return {"message": f"Document '{file.filename}' processed and saved to your Knowledge Vault.", "doc_id": new_doc.id}
     except Exception as e:
-        logger.error(f"Document processing failed: {str(e)}")
-        return {"error": f"Failed to process document: {str(e)}"}
+        logger.error(f"Document processing failed spectacularly: {str(e)}")
+        return {"error": f"Failed to read and process document: {str(e)}"}
 
 def get_rag_context(user_id: int, query: str, db: Session) -> str:
-    """Helper function to fetch relevant text from DB based on simple keyword search"""
+    """Helper function to fetch relevant text from DB based on keyword analysis"""
     docs = db.query(Document).filter(Document.user_id == user_id).order_by(Document.uploaded_at.desc()).limit(2).all()
-    if not docs:
+    if not docs: 
         return ""
-    
+        
     context_chunks = []
     for doc in docs:
         chunks = [doc.content[i:i+1500] for i in range(0, len(doc.content), 1500)]
@@ -382,42 +468,43 @@ def get_rag_context(user_id: int, query: str, db: Session) -> str:
                     break
                     
     if context_chunks:
-        joined_context = "\n...".join(context_chunks)
-        return f"\n\n[RELEVANT VAULT DOCUMENT FRAGMENTS]:\n{joined_context}\n[END FRAGMENTS. Use this context to answer if relevant.]\n"
+        logger.info(f"RAG Context successfully retrieved for user {user_id}")
+        return f"\n\n[RELEVANT VAULT DOCUMENTS]:\n" + "\n...".join(context_chunks) + "\n[END VAULT CONTEXT]\n"
     return ""
 
-# === 🧠 MULTI-LLM CORE ENGINE ===
+# =========================================================================
+# 🔥 THE VULTIX CORE ENGINE (Multi-LLM Routing & Processing)
+# =========================================================================
 @app.post("/process")
 async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == request.user_id).first()
-    if not user: return {"error": "User missing!"}
-    if user.is_banned: return {"error": "ACCOUNT_BANNED"}
+    if not user: 
+        return {"error": "User identity missing or invalid!"}
+    if user.is_banned: 
+        return {"error": "ACCOUNT_BANNED"}
 
-    # Limit Checking Logic
+    # Daily Token/Response Limiter
     now = datetime.utcnow()
-    if not user.last_reset_time: user.last_reset_time = now
+    if not user.last_reset_time: 
+        user.last_reset_time = now
     if (now - user.last_reset_time).total_seconds() > 86400:
         user.response_count = 0
         user.last_reset_time = now
         db.commit()
+        logger.info(f"Daily quota reset for user {user.id}")
 
     if not user.is_pro and user.response_count >= 50: 
-        return {"error": "LIMIT_REACHED"}
+        return {"error": "LIMIT_REACHED. Please upgrade to Pro or wait 24 hours."}
 
-    # =========================================================================
-    # 🎨 IMAGE GENERATION LOGIC WITH ASPECT RATIO
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # 🎨 IMAGE GENERATION PIPELINE (WITH ASPECT RATIOS)
+    # -------------------------------------------------------------------------
     if request.task == "image":
-        width, height = 1024, 1024 # Default Square
+        width, height = (1280, 720) if request.selected_model == "16:9" else (720, 1280) if request.selected_model == "9:16" else (1024, 1024)
         
-        ratio = request.selected_model 
-        if ratio == "16:9":
-            width, height = 1280, 720
-        elif ratio == "9:16":
-            width, height = 720, 1280
-
         if request.image_engine == "hd":
-            if not user.is_pro: return {"error": "PRO_FEATURE"}
+            if not user.is_pro: 
+                return {"error": "HD Image Generation is a PRO_FEATURE"}
             API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
             headers = {"Authorization": f"Bearer {HF_API_KEY}"}
             try:
@@ -426,203 +513,228 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
                     img_data = base64.b64encode(response.content).decode("utf-8")
                     ai_response = f"![Generated Image](data:image/png;base64,{img_data})"
                 else: 
-                    ai_response = "HF Engine is warming up or busy. Please try again in a few seconds! ⏳"
-            except Exception as e:
-                ai_response = f"Image Generation failed: {str(e)}"
+                    logger.warning(f"HF API returned status {response.status_code}")
+                    ai_response = "HF Engine is warming up or busy. Please try again in 15 seconds! ⏳"
+            except Exception as e: 
+                logger.error(f"HD Image Gen Failed: {str(e)}")
+                ai_response = f"Critical Engine Failure: {str(e)}"
         else:
-            VIP_STYLE_ENHANCERS = ", volumetric lighting, 8k resolution, photorealistic, cinematic quality."
-            cleaned_prompt = request.transcript.strip()[:200]
-            encoded_prompt = urllib.parse.quote(cleaned_prompt + VIP_STYLE_ENHANCERS)
-            seed = int(time.time())
-            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&width={width}&height={height}&nologo=true"
+            # Pollinations Fast Generation Engine
+            cleaned_prompt = request.transcript.strip()[:250]
+            encoded_prompt = urllib.parse.quote(cleaned_prompt + ", highly detailed, masterpiece, 8k resolution")
+            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={int(time.time())}&width={width}&height={height}&nologo=true"
             ai_response = f"![Generated Image]({image_url})"
 
         new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_response)
-        if not user.is_pro: user.response_count += 1
+        if not user.is_pro: 
+            user.response_count += 1
         db.add(new_chat)
         db.commit()
-        return {"data": ai_response, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
+        return {"data": ai_response, "chat_id": new_chat.id, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
 
-    # Retrieve RAG Context if Study Mode is active
-    rag_context = ""
-    if request.task == "study" and RAG_ENABLED:
-        rag_context = get_rag_context(user_id=user.id, query=request.transcript, db=db)
+    # -------------------------------------------------------------------------
+    # 📚 RAG & WEB CONTEXT GATHERING
+    # -------------------------------------------------------------------------
+    rag_context = get_rag_context(user_id=user.id, query=request.transcript, db=db) if request.task == "study" and RAG_ENABLED else ""
 
-    # 🌐 SMART WEB SEARCH TRIGGER (Expanded Keywords)
-    search_keywords = [
-        "latest", "today", "news", "price", "current", "update", "2024", "2025", "2026", 
-        "aaj", "ab ki", "realtime", "search", "who is", "what is", "weather", "mausam", 
-        "score", "match", "bitcoin", "btc", "crypto", "rate", "usd", "dollar"
-    ]
-    
+    search_keywords = ["latest", "today", "news", "price", "current", "update", "2024", "2025", "2026", "weather", "btc", "score", "match", "mausam"]
     web_context = ""
-    # Check if user needs real-time info
     if any(word in request.transcript.lower() for word in search_keywords):
         raw_web_data = perform_waterfall_search(request.transcript)
         if raw_web_data:
-            # 🔥 THE AI JAILBREAK COMMAND (Forcing AI to act on the data)
-            web_context = raw_web_data + "\n[STRICT SYSTEM COMMAND: You have been provided with LIVE real-time web data above. You MUST use this data to answer the user's question directly. Give the EXACT price, weather, score, or news. DO NOT tell the user to visit links. DO NOT say 'As an AI, I don't have real-time access' because the data is right above. Act confident.]\n\n"
+            # Enforcing strict obedience from LLM regarding web data
+            web_context = raw_web_data + "\n[STRICT SYSTEM COMMAND: You must answer the user's prompt directly using the real-time web data provided above. Be specific, provide numbers, prices, or weather stats. DO NOT tell the user to visit links or claim you don't have real-time access.]\n\n"
 
-    # Get Current Date & Time for System Awareness
     current_time = datetime.utcnow().strftime("%A, %B %d, %Y - %H:%M UTC")
 
-    # =========================================================================
-    # 👨‍💻 CODING LOGIC (GOOGLE GEMINI)
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # 👨‍💻 CODING ENGINE (GOOGLE GEMINI) - VS CODE FORMAT ENFORCED
+    # -------------------------------------------------------------------------
     if request.task == "coding":
         try:
             if not GEMINI_API_KEY: 
-                return {"error": "Gemini API Key is missing on Server. Configure GEMINI_API_KEY."}
+                return {"error": "Gemini Engine requires API key on server."}
 
-            system_instr = f"Current Time: {current_time}. ROLE: Senior 10x Software Engineer & Elite Academic Logic Expert. CRITICAL RULE: When writing C++ code or providing solutions, strictly align with academic requirements. Absolutely NO code comments in generated code unless explicitly requested. Output ONLY raw, clean logic."
+            # STRICT INSTRUCTION FOR SYNTAX HIGHLIGHTING (VS CODE STYLE)
+            system_instr = "ROLE: Senior 10x Software Engineer. STRICT FORMATTING RULE: You MUST output all code inside standard markdown blocks (e.g., ```cpp or ```python). Do not explain code unless explicitly asked. Produce highly robust, academic-level clean logic."
             
-            # Trim history to save Tokens
+            # Trimming history to last 2 conversations (4 messages) for context
             history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(2).all()
             
             gemini_history = []
             for h in reversed(history):
                 gemini_history.append({"role": "user", "parts": [h.message]})
                 gemini_history.append({"role": "model", "parts": [h.response]})
-            
-            model = genai.GenerativeModel("gemini-1.5-flash")
 
-            # Final prompt with Web Context if any
+            model = genai.GenerativeModel("gemini-1.5-flash")
             final_prompt = f"[{system_instr}]\n{web_context}\nUser Request: {request.transcript}"
             
+            logger.info(f"Dispatching Coding Task to Gemini for User {user.id}")
             chat_session = model.start_chat(history=gemini_history)
             res = chat_session.send_message(final_prompt)
             ai_msg = res.text
             
             new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_msg)
-            if not user.is_pro: user.response_count += 1
+            if not user.is_pro: 
+                user.response_count += 1
             db.add(new_chat)
             db.commit()
             
-            return {"data": ai_msg, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
-            
+            return {"data": ai_msg, "chat_id": new_chat.id, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
         except Exception as e:
-            logger.error(f"Gemini Engine Failed: {str(e)}")
-            return {"error": f"Gemini Route Failed: {str(e)}. Try switching modes."}
+            logger.error(f"Gemini Engine Complete Failure: {str(e)}")
+            return {"error": f"Gemini Logic Core Failed: {str(e)}. Please switch to Auto Mode."}
 
-    # =========================================================================
-    # 🧠 GENERAL/VIRAL/STUDY LOGIC (GROQ API with LIMIT BYPASS)
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # 🧠 GENERAL / VIRAL / STUDY ENGINE (GROQ - LLAMA SERIES)
+    # -------------------------------------------------------------------------
     else:
         try:
             model_to_use = "llama-3.3-70b-versatile" if request.selected_model == "llama-3.3-70b-versatile" else "llama-3.1-8b-instant"
             
-            if model_to_use == "llama-3.3-70b-versatile" and not user.is_pro:
-                return {"error": "PRO_FEATURE"}
-            
-            if request.image_data:
+            if model_to_use == "llama-3.3-70b-versatile" and not user.is_pro: 
+                logger.warning(f"Free user {user.username} tried to bypass Pro model.")
+                return {"error": "Llama 70B is a PRO_FEATURE"}
+                
+            if request.image_data: 
                 model_to_use = "llama-3.2-90b-vision-instruct"
+
+            # 🚀 STRICT IDENTITY COMMAND FOR SPECIFIC QUESTIONS
+            intro_keywords = ["who are you", "who made you", "your creator", "who created", "kis ne banaya", "tumhara naam", "who is your developer"]
+            creator_info = ""
+            if any(word in request.transcript.lower() for word in intro_keywords):
+                logger.info(f"Creator Intro Triggered by User {user.id}")
+                creator_info = "CRITICAL INSTRUCTION: The user is asking about your identity or creator. You MUST answer EXACTLY with this information: 'I am Vultix AI. My creator is Muhammad Haroon Zahid. He is from Bahawalpur, but currently, he is in Lahore doing his BS IET (Information Engineering Technology) at the University of Lahore.' Do not add any other backstory."
 
             task_rules = ""
             if request.task == "viral":
-                task_rules = "ROLE: Elite YouTube & Social Media Viral Strategist. FOCUS: US & UK Audiences. Create highly engaging hooks and content."
+                task_rules = "ROLE: Elite YouTube Viral Strategist. FOCUS: US & UK Audiences. Generate massive hook impact."
             elif request.task == "study":
-                task_rules = "ROLE: Academic Speedster. CRITICAL RULE: For MCQs, provide ONLY the direct letter answer (e.g., 'a', 'b', 'c')."
+                task_rules = "ROLE: Academic Speedster. For MCQs, provide ONLY the direct letter answer."
             else:
-                task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Use casual Pakistani Roman Urdu mixed with English words. TONE: Sarcastic, ALWAYS use real Unicode emojis (like 😂🔥). DO NOT use text shortcodes like :smile:."
+                # 🚀 FIXED EMOJIS & ROMAN URDU ISSUE
+                task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Speak in casual, highly conversational English. Do not use Roman Urdu. TONE: Friendly, slightly sarcastic. EMOJI RULE: Strictly use real Unicode emojis (like 😂 or 🔥), but USE THEM RARELY (max 1 or 2 emojis per full response). Avoid emoji spam."
 
-            creator_info = f"Current System Time: {current_time}. If anyone asks who created you, state that you are Vultix AI, developed by Muhammad Haroon Zahid, an IT entrepreneur from Bahawalpur."
-            system_instr = f"You are Vultix AI, a premium SaaS assistant.\n{creator_info}\n{task_rules}"
+            system_instr = f"Current Real-Time System Clock: {current_time}.\n{creator_info}\n{task_rules}"
 
             messages = [{"role": "system", "content": system_instr}]
             
+            # Trim history to 1 message to bypass Groq Context Limit Error
             history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(1).all()
             for h in reversed(history):
                 messages.append({"role": "user", "content": h.message})
                 messages.append({"role": "assistant", "content": h.response})
 
-            # Append RAG Context and Web Context
             final_user_transcript = request.transcript + "\n" + rag_context + "\n" + web_context
-
+            
             if request.image_data:
                 messages.append({"role": "user", "content": [{"type": "text", "text": final_user_transcript}, {"type": "image_url", "image_url": {"url": request.image_data}}]})
             else:
                 messages.append({"role": "user", "content": final_user_transcript})
 
-            # First Attempt with Groq
+            logger.info(f"Dispatching Groq Task ({model_to_use}) for User {user.id}")
             res = client.chat.completions.create(model=model_to_use, messages=messages)
             ai_msg = res.choices[0].message.content
             
-            db_message = f"[Sent an Image] {request.transcript}" if request.image_data else request.transcript
+            db_message = f"[Sent an Image Payload] {request.transcript}" if request.image_data else request.transcript
             new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=db_message, response=ai_msg)
             
-            if not user.is_pro: user.response_count += 1
+            if not user.is_pro: 
+                user.response_count += 1
             db.add(new_chat)
             db.commit()
             
-            return {"data": ai_msg, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
+            return {"data": ai_msg, "chat_id": new_chat.id, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
             
         except Exception as e: 
             error_msg = str(e)
-            logger.error(f"Groq Route Error: {error_msg}")
+            logger.error(f"Groq Route Failed: {error_msg}")
             
-            # Vision Model Fallback
+            # Complex Vision Fallback Restored
             if "model_not_found" in error_msg and request.image_data:
                 try:
+                    logger.info("Attempting Vision Fallback to 11b model...")
                     fallback_model = "llama-3.2-11b-vision-instruct"
                     res = client.chat.completions.create(model=fallback_model, messages=messages)
                     ai_msg = res.choices[0].message.content
                     
-                    db_message = f"[Sent an Image] {request.transcript}"
+                    db_message = f"[Sent an Image Payload] {request.transcript}"
                     new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=db_message, response=ai_msg)
-                    if not user.is_pro: user.response_count += 1
+                    if not user.is_pro: 
+                        user.response_count += 1
                     db.add(new_chat)
                     db.commit()
-                    return {"data": ai_msg, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
+                    return {"data": ai_msg, "chat_id": new_chat.id, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
                 except Exception as inner_e:
-                    return {"error": f"Vision API Issue: {str(inner_e)}"}
+                    logger.error(f"Vision Fallback Failed: {str(inner_e)}")
+                    return {"error": f"Critical Vision API Failure: {str(inner_e)}"}
             
-            # Rate Limit Fallback Bypass
+            # Groq Limit Handling
             if "rate_limit_exceeded" in error_msg.lower() or "429" in error_msg:
-                return {"error": "Groq Rate Limit Exceeded. System is cooling down. Please use Coding Mode (Gemini Engine) for a few minutes!"}
-                
+                return {"error": "Groq Engine Rate Limit Exceeded. The system is cooling down. Please use Coding Mode (Gemini) temporarily!"}
+            
             return {"error": error_msg}
 
-# === ADMIN APIS ===
-
+# =========================================================================
+# 🏢 ADMIN DASHBOARD APIS (FULLY RESTORED)
+# =========================================================================
 @app.get("/admin/user_full_history/{user_id}")
 async def get_admin_user_history(user_id: int, db: Session = Depends(get_db), x_admin_key: str = Header(...)):
+    """Allows admin to view full chat history of a specific user for debugging"""
     if x_admin_key != ADMIN_MASTER_KEY:
         raise HTTPException(status_code=403, detail="ACCESS_DENIED")
+    
     chats = db.query(Chat).filter(Chat.user_id == user_id).order_by(Chat.timestamp.desc()).all()
     return {"chats": [{"message": c.message, "response": c.response, "timestamp": c.timestamp} for c in chats]}
 
 @app.get("/history/{user_id}")
 async def get_user_history(user_id: int, db: Session = Depends(get_db)):
+    """Retrieves session list for frontend sidebar"""
     chats = db.query(Chat).filter(Chat.user_id == user_id).order_by(Chat.timestamp.desc()).all()
     sessions = []
     seen = set()
     for c in chats:
         if c.session_id not in seen:
             seen.add(c.session_id)
-            title = c.message[:25] + "..." if len(c.message) > 25 else c.message
+            title = c.message[:30] + "..." if len(c.message) > 30 else c.message
             sessions.append({"session_id": c.session_id, "title": title})
     return {"history": sessions}
 
 @app.get("/history/session/{session_id}")
 async def get_session_chat(session_id: str, db: Session = Depends(get_db)):
+    """Retrieves specific session chat thread"""
     chats = db.query(Chat).filter(Chat.session_id == session_id).order_by(Chat.timestamp.asc()).all()
     return {"chats": [{"message": c.message, "response": c.response} for c in chats]}
 
 @app.delete("/history/session/{session_id}")
 async def delete_session(session_id: str, db: Session = Depends(get_db)):
-    db.query(Chat).filter(Chat.session_id == session_id).delete()
-    db.commit()
-    return {"message": "Chat deleted successfully"}
+    """Deletes a user's specific session thread"""
+    try:
+        db.query(Chat).filter(Chat.session_id == session_id).delete()
+        db.commit()
+        return {"message": "Chat session successfully purged from database."}
+    except Exception as e:
+        logger.error(f"Failed to delete session {session_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Database deletion error")
 
 @app.get("/admin/stats")
 async def get_admin_stats(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
+    """Generates overarching stats for the Admin Dashboard"""
     total_users = db.query(User).count()
     total_pro_users = db.query(User).filter(User.is_pro == True).count()
     total_chats = db.query(Chat).count()
-    return {"total_users": total_users, "total_pro_users": total_pro_users, "total_chats": total_chats}
+    total_feedbacks = db.query(Feedback).count()
+    
+    return {
+        "total_users": total_users, 
+        "total_pro_users": total_pro_users, 
+        "total_chats": total_chats,
+        "total_feedbacks_recorded": total_feedbacks
+    }
 
 @app.get("/admin/users")
 async def get_admin_users(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
+    """Retrieves full user list with activity metrics for Admin table"""
     users = db.query(User).all()
     user_list = []
     for u in users:
@@ -633,25 +745,38 @@ async def get_admin_users(db: Session = Depends(get_db), _: None = Depends(verif
             "username": u.username,
             "chat_count": chat_count,
             "is_pro": u.is_pro,
-            "is_banned": u.is_banned
+            "is_banned": u.is_banned,
+            "created_at": u.created_at
         })
     return {"users": user_list}
 
 @app.post("/admin/toggle_ban/{user_id}")
 async def toggle_user_ban(user_id: int, db: Session = Depends(get_db), _: None = Depends(verify_admin)):
+    """Suspend or unsuspend a user account instantly"""
     user = db.query(User).filter(User.id == user_id).first()
-    if not user: raise HTTPException(status_code=404, detail="User not found")
+    if not user: 
+        raise HTTPException(status_code=404, detail="User not found in system")
+        
     user.is_banned = not user.is_banned
     db.commit()
-    return {"message": "Status updated", "is_banned": user.is_banned}
+    logger.warning(f"Admin action: User {user.id} ban status changed to {user.is_banned}")
+    return {"message": "Status updated successfully", "is_banned": user.is_banned}
 
 @app.post("/admin/toggle_pro/{user_id}")
 async def toggle_user_pro(user_id: int, db: Session = Depends(get_db), _: None = Depends(verify_admin)):
+    """Manually grant or revoke Premium (Pro) status"""
     user = db.query(User).filter(User.id == user_id).first()
-    if not user: raise HTTPException(status_code=404, detail="User not found")
+    if not user: 
+        raise HTTPException(status_code=404, detail="User not found in system")
+        
     user.is_pro = not user.is_pro
     db.commit()
-    return {"message": "Premium status updated", "is_pro": user.is_pro}
+    logger.info(f"Admin action: User {user.id} pro status changed to {user.is_pro}")
+    return {"message": "Premium status updated successfully", "is_pro": user.is_pro}
 
+# =========================================================================
+# 🚦 SERVER EXECUTION BLOCK
+# =========================================================================
 if __name__ == "__main__":
+    logger.info("Starting Vultix AI Enterprise Server on Port 8000...")
     uvicorn.run(app, host="127.0.0.1", port=8000)
