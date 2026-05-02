@@ -275,37 +275,43 @@ async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
     return {"status": "success"}
 
 # === 🌐 WATERFALL WEB SEARCH SYSTEM (DDGS -> BRAVE -> GOOGLE) ===
+import wikipedia # ADD THIS TO THE TOP OF YOUR FILE WITH OTHER IMPORTS
+
+# ... (rest of your code) ...
+
+# === 🌐 WATERFALL WEB SEARCH SYSTEM (DDGS -> WIKIPEDIA -> GOOGLE) ===
 def perform_waterfall_search(query: str) -> str:
     results = []
     
-    # Tier 1: DuckDuckGo (Free, Unlimited)
+    # Tier 1: DuckDuckGo (Free, Unlimited) - Made more robust
     try:
         if DDGS_ENABLED:
             logger.info("Attempting Web Search via DuckDuckGo (Tier 1)...")
             with DDGS() as ddgs:
+                # Add a slight delay to prevent DDGS rate limiting
+                time.sleep(1) 
                 ddgs_results = list(ddgs.text(query, max_results=3))
                 if ddgs_results:
                     for r in ddgs_results:
                         results.append(f"Title: {r.get('title')}\nSnippet: {r.get('body')}")
                     return "\n\n[REAL-TIME WEB DATA (DDGS)]:\n" + "\n---\n".join(results)
     except Exception as e:
-        logger.warning(f"DDGS Failed: {str(e)}")
+        logger.warning(f"DDGS Failed or Rate Limited: {str(e)}")
 
-    # Tier 2: Brave Search API (Fallback)
+    # Tier 2: Wikipedia API (100% Free, No Key Required)
     try:
-        if BRAVE_API_KEY:
-            logger.info("Attempting Web Search via Brave API (Tier 2)...")
-            headers = {"Accept": "application/json", "Accept-Encoding": "gzip", "X-Subscription-Token": BRAVE_API_KEY}
-            res = requests.get(f"https://api.search.brave.com/res/v1/web/search?q={urllib.parse.quote(query)}&count=3", headers=headers, timeout=5)
-            if res.status_code == 200:
-                brave_data = res.json()
-                for r in brave_data.get("web", {}).get("results", [])[:3]:
-                    results.append(f"Title: {r.get('title')}\nSnippet: {r.get('description')}")
-                return "\n\n[REAL-TIME WEB DATA (BRAVE)]:\n" + "\n---\n".join(results)
+        logger.info("Attempting Web Search via Wikipedia API (Tier 2)...")
+        # Try to find a relevant page
+        wiki_search = wikipedia.search(query, results=1)
+        if wiki_search:
+            page = wikipedia.page(wiki_search[0])
+            snippet = page.summary[:500] # Get the first 500 characters
+            results.append(f"Title: {page.title}\nSnippet: {snippet}...")
+            return "\n\n[REAL-TIME WEB DATA (WIKIPEDIA)]:\n" + "\n---\n".join(results)
     except Exception as e:
-        logger.warning(f"Brave Search Failed: {str(e)}")
+        logger.warning(f"Wikipedia Search Failed: {str(e)}")
 
-    # Tier 3: Google Custom Search (Last Resort)
+    # Tier 3: Google Custom Search (Last Resort - 100 free/day)
     try:
         if GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX:
             logger.info("Attempting Web Search via Google Search API (Tier 3)...")
