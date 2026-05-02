@@ -561,7 +561,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             }
             
             payload = {
-                "model": "qwen/qwen-2.5-coder-32b-instruct:free", # 100% Free & Beast for Coding
+                "model": "meta-llama/llama-3.1-8b-instruct:free", # Highly stable free model
                 "messages": messages,
                 "temperature": 0.5
             }
