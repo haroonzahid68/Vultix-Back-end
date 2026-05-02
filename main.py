@@ -566,7 +566,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
                 "temperature": 0.5
             }
             
-            res = requests.post("[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)", headers=headers, json=payload, timeout=60)
+           res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=60)
             
             if res.status_code == 200:
                 ai_msg = res.json()["choices"][0]["message"]["content"]
