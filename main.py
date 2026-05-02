@@ -444,7 +444,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             elif request.task == "study":
                 task_rules = "ROLE: Academic Speedster. CRITICAL RULE: For MCQs, provide ONLY the direct letter answer (e.g., 'a', 'b', 'c')."
             else:
-                task_rules = "ROLE: Best friend and supportive AI. TONE: Friendly, helpful, use Pakistani Roman Urdu mixed with English words."
+                task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Use casual Pakistani Roman Urdu mixed with English words. TONE: Sarcastic, ALWAYS use real Unicode emojis (like 😂🔥). DO NOT use text shortcodes like :smile:."
 
             creator_info = "If anyone asks who created you, state that you are Vultix AI, developed by Muhammad Haroon Zahid, an IT entrepreneur from Bahawalpur."
             system_instr = f"You are Vultix AI, a premium SaaS assistant.\n{creator_info}\n{task_rules}"
