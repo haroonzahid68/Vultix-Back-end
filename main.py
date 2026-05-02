@@ -441,12 +441,23 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     if request.task == "study" and RAG_ENABLED:
         rag_context = get_rag_context(user_id=user.id, query=request.transcript, db=db)
 
-    # 🌐 SMART WEB SEARCH TRIGGER
-    search_keywords = ["latest", "today", "news", "price", "current", "update", "2024", "2025", "2026", "aaj", "ab ki", "realtime", "search", "who is", "what is"]
+    # 🌐 SMART WEB SEARCH TRIGGER (Expanded Keywords)
+    search_keywords = [
+        "latest", "today", "news", "price", "current", "update", "2024", "2025", "2026", 
+        "aaj", "ab ki", "realtime", "search", "who is", "what is", "weather", "mausam", 
+        "score", "match", "bitcoin", "btc", "crypto", "rate", "usd", "dollar"
+    ]
+    
     web_context = ""
-    # Only search if user asks something that looks like it needs recent info
+    # Check if user needs real-time info
     if any(word in request.transcript.lower() for word in search_keywords):
-        web_context = perform_waterfall_search(request.transcript)
+        raw_web_data = perform_waterfall_search(request.transcript)
+        if raw_web_data:
+            # 🔥 THE AI JAILBREAK COMMAND (Forcing AI to act on the data)
+            web_context = raw_web_data + "\n[STRICT SYSTEM COMMAND: You have been provided with LIVE real-time web data above. You MUST use this data to answer the user's question directly. Give the EXACT price, weather, score, or news. DO NOT tell the user to visit links. DO NOT say 'As an AI, I don't have real-time access' because the data is right above. Act confident.]\n\n"
+
+    # Get Current Date & Time for System Awareness
+    current_time = datetime.utcnow().strftime("%A, %B %d, %Y - %H:%M UTC")
 
     # =========================================================================
     # 👨‍💻 CODING LOGIC (GOOGLE GEMINI)
@@ -456,7 +467,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             if not GEMINI_API_KEY: 
                 return {"error": "Gemini API Key is missing on Server. Configure GEMINI_API_KEY."}
 
-            system_instr = "ROLE: Senior 10x Software Engineer & Elite Academic Logic Expert. CRITICAL RULE: When writing C++ code or providing solutions, strictly align with academic requirements. Absolutely NO code comments in generated code unless explicitly requested. Output ONLY raw, clean logic."
+            system_instr = f"Current Time: {current_time}. ROLE: Senior 10x Software Engineer & Elite Academic Logic Expert. CRITICAL RULE: When writing C++ code or providing solutions, strictly align with academic requirements. Absolutely NO code comments in generated code unless explicitly requested. Output ONLY raw, clean logic."
             
             # Trim history to save Tokens
             history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(2).all()
@@ -505,10 +516,9 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             elif request.task == "study":
                 task_rules = "ROLE: Academic Speedster. CRITICAL RULE: For MCQs, provide ONLY the direct letter answer (e.g., 'a', 'b', 'c')."
             else:
-                # 🔥 ORIGINAL EMOJI RULE RESTORED!
                 task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Use casual Pakistani Roman Urdu mixed with English words. TONE: Sarcastic, ALWAYS use real Unicode emojis (like 😂🔥). DO NOT use text shortcodes like :smile:."
 
-            creator_info = "If anyone asks who created you, state that you are Vultix AI, developed by Muhammad Haroon Zahid, an IT entrepreneur from Bahawalpur."
+            creator_info = f"Current System Time: {current_time}. If anyone asks who created you, state that you are Vultix AI, developed by Muhammad Haroon Zahid, an IT entrepreneur from Bahawalpur."
             system_instr = f"You are Vultix AI, a premium SaaS assistant.\n{creator_info}\n{task_rules}"
 
             messages = [{"role": "system", "content": system_instr}]
@@ -519,7 +529,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
                 messages.append({"role": "assistant", "content": h.response})
 
             # Append RAG Context and Web Context
-            final_user_transcript = request.transcript + rag_context + web_context
+            final_user_transcript = request.transcript + "\n" + rag_context + "\n" + web_context
 
             if request.image_data:
                 messages.append({"role": "user", "content": [{"type": "text", "text": final_user_transcript}, {"type": "image_url", "image_url": {"url": request.image_data}}]})
