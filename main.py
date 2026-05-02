@@ -33,6 +33,14 @@ except ImportError:
     RAG_ENABLED = False
     print("WARNING: RAG modules (PyPDF2, numpy, faiss) not found. Document upload will be disabled.")
 
+# Web Search specific imports
+try:
+    from duckduckgo_search import DDGS
+    DDGS_ENABLED = True
+except ImportError:
+    DDGS_ENABLED = False
+    print("WARNING: duckduckgo-search module not found. Tier 1 Web Search disabled.")
+
 import google.generativeai as genai
 
 # === LOGGING SETUP ===
@@ -47,8 +55,8 @@ HF_API_KEY = os.getenv("HF_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./vultix_core.db")
 ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "ceo123")
 
-# 🚀 NEW KEYS FOR SAAS MONETIZATION & MULTI-LLM
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # NEW: For Coding Engine
+# 🚀 NEW KEYS FOR SAAS MONETIZATION, MULTI-LLM & SEARCH
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 else:
@@ -58,6 +66,11 @@ LEMON_API_KEY = os.getenv("LEMON_API_KEY")
 LEMON_WEBHOOK_SECRET = os.getenv("LEMON_WEBHOOK_SECRET")
 LEMON_STORE_ID = os.getenv("LEMON_STORE_ID")
 LEMON_VARIANT_ID = os.getenv("LEMON_VARIANT_ID")
+
+# Web Search APIs
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
+GOOGLE_SEARCH_API_KEY = os.getenv("GOOGLE_SEARCH_API_KEY")
+GOOGLE_SEARCH_CX = os.getenv("GOOGLE_SEARCH_CX")
 
 # === DATABASE SETUP ===
 if DATABASE_URL.startswith("sqlite"):
@@ -100,7 +113,7 @@ class Document(Base):
 Base.metadata.create_all(bind=engine)
 
 # === FASTAPI APP ===
-app = FastAPI(title="Vultix AI Pro SaaS Engine", version="3.2.0")
+app = FastAPI(title="Vultix AI Pro SaaS Engine", version="3.3.0")
 
 # CORS Middleware Setup
 app.add_middleware(
@@ -137,7 +150,7 @@ class ChatRequest(BaseModel):
     selected_model: str = "auto"
     image_engine: str = "fast"
     image_data: Optional[str] = None
-    use_rag: Optional[bool] = False # Flag to tell system to use uploaded documents
+    use_rag: Optional[bool] = False 
 
 class CheckoutRequest(BaseModel):
     user_id: int
@@ -261,6 +274,52 @@ async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
             
     return {"status": "success"}
 
+# === 🌐 WATERFALL WEB SEARCH SYSTEM (DDGS -> BRAVE -> GOOGLE) ===
+def perform_waterfall_search(query: str) -> str:
+    results = []
+    
+    # Tier 1: DuckDuckGo (Free, Unlimited)
+    try:
+        if DDGS_ENABLED:
+            logger.info("Attempting Web Search via DuckDuckGo (Tier 1)...")
+            with DDGS() as ddgs:
+                ddgs_results = list(ddgs.text(query, max_results=3))
+                if ddgs_results:
+                    for r in ddgs_results:
+                        results.append(f"Title: {r.get('title')}\nSnippet: {r.get('body')}")
+                    return "\n\n[REAL-TIME WEB DATA (DDGS)]:\n" + "\n---\n".join(results)
+    except Exception as e:
+        logger.warning(f"DDGS Failed: {str(e)}")
+
+    # Tier 2: Brave Search API (Fallback)
+    try:
+        if BRAVE_API_KEY:
+            logger.info("Attempting Web Search via Brave API (Tier 2)...")
+            headers = {"Accept": "application/json", "Accept-Encoding": "gzip", "X-Subscription-Token": BRAVE_API_KEY}
+            res = requests.get(f"https://api.search.brave.com/res/v1/web/search?q={urllib.parse.quote(query)}&count=3", headers=headers, timeout=5)
+            if res.status_code == 200:
+                brave_data = res.json()
+                for r in brave_data.get("web", {}).get("results", [])[:3]:
+                    results.append(f"Title: {r.get('title')}\nSnippet: {r.get('description')}")
+                return "\n\n[REAL-TIME WEB DATA (BRAVE)]:\n" + "\n---\n".join(results)
+    except Exception as e:
+        logger.warning(f"Brave Search Failed: {str(e)}")
+
+    # Tier 3: Google Custom Search (Last Resort)
+    try:
+        if GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX:
+            logger.info("Attempting Web Search via Google Search API (Tier 3)...")
+            res = requests.get(f"https://www.googleapis.com/customsearch/v1?q={urllib.parse.quote(query)}&key={GOOGLE_SEARCH_API_KEY}&cx={GOOGLE_SEARCH_CX}&num=3", timeout=5)
+            if res.status_code == 200:
+                google_data = res.json()
+                for item in google_data.get("items", [])[:3]:
+                    results.append(f"Title: {item.get('title')}\nSnippet: {item.get('snippet')}")
+                return "\n\n[REAL-TIME WEB DATA (GOOGLE)]:\n" + "\n---\n".join(results)
+    except Exception as e:
+        logger.warning(f"Google Search Failed: {str(e)}")
+
+    return "" # No results found or all APIs failed
+
 # === 🧠 KNOWLEDGE VAULT: RAG SYSTEM (Retrieval-Augmented Generation) ===
 @app.post("/upload-document")
 async def upload_document(
@@ -300,21 +359,19 @@ async def upload_document(
         return {"error": f"Failed to process document: {str(e)}"}
 
 def get_rag_context(user_id: int, query: str, db: Session) -> str:
-    """Helper function to fetch relevant text from DB based on simple keyword search (Lightweight RAG)"""
+    """Helper function to fetch relevant text from DB based on simple keyword search"""
     docs = db.query(Document).filter(Document.user_id == user_id).order_by(Document.uploaded_at.desc()).limit(2).all()
     if not docs:
         return ""
     
     context_chunks = []
     for doc in docs:
-        # Very lightweight chunking for Render server safety
         chunks = [doc.content[i:i+1500] for i in range(0, len(doc.content), 1500)]
         for chunk in chunks:
-            # Simple keyword matching heuristic
             keywords = [w.lower() for w in query.split() if len(w) > 4]
             if any(k in chunk.lower() for k in keywords):
                 context_chunks.append(chunk)
-                if len(context_chunks) > 2: # Keep context size manageable for LLM
+                if len(context_chunks) > 2: 
                     break
                     
     if context_chunks:
@@ -346,7 +403,6 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     if request.task == "image":
         width, height = 1024, 1024 # Default Square
         
-        # Check aspect ratio
         ratio = request.selected_model 
         if ratio == "16:9":
             width, height = 1280, 720
@@ -385,18 +441,24 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     if request.task == "study" and RAG_ENABLED:
         rag_context = get_rag_context(user_id=user.id, query=request.transcript, db=db)
 
+    # 🌐 SMART WEB SEARCH TRIGGER
+    search_keywords = ["latest", "today", "news", "price", "current", "update", "2024", "2025", "2026", "aaj", "ab ki", "realtime", "search", "who is", "what is"]
+    web_context = ""
+    # Only search if user asks something that looks like it needs recent info
+    if any(word in request.transcript.lower() for word in search_keywords):
+        web_context = perform_waterfall_search(request.transcript)
+
     # =========================================================================
     # 👨‍💻 CODING LOGIC (GOOGLE GEMINI)
     # =========================================================================
     if request.task == "coding":
-        # 🛡️ THE TRY-EXCEPT BLOCK FIXED AND INDENTED PROPERLY
         try:
             if not GEMINI_API_KEY: 
                 return {"error": "Gemini API Key is missing on Server. Configure GEMINI_API_KEY."}
 
             system_instr = "ROLE: Senior 10x Software Engineer & Elite Academic Logic Expert. CRITICAL RULE: When writing C++ code or providing solutions, strictly align with academic requirements. Absolutely NO code comments in generated code unless explicitly requested. Output ONLY raw, clean logic."
             
-            # 🚀 GROQ LIMIT FIX: Trim history to last 2 conversations (4 messages) to save Tokens
+            # Trim history to save Tokens
             history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(2).all()
             
             gemini_history = []
@@ -404,12 +466,11 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
                 gemini_history.append({"role": "user", "parts": [h.message]})
                 gemini_history.append({"role": "model", "parts": [h.response]})
             
-            # Using stable gemini-1.5-flash which is widely supported
             model = genai.GenerativeModel("gemini-1.5-flash")
 
-            final_prompt = f"[{system_instr}]\n\nUser Request: {request.transcript}"
+            # Final prompt with Web Context if any
+            final_prompt = f"[{system_instr}]\n{web_context}\nUser Request: {request.transcript}"
             
-            # Start chat with history and send the new prompt
             chat_session = model.start_chat(history=gemini_history)
             res = chat_session.send_message(final_prompt)
             ai_msg = res.text
@@ -444,6 +505,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             elif request.task == "study":
                 task_rules = "ROLE: Academic Speedster. CRITICAL RULE: For MCQs, provide ONLY the direct letter answer (e.g., 'a', 'b', 'c')."
             else:
+                # 🔥 ORIGINAL EMOJI RULE RESTORED!
                 task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Use casual Pakistani Roman Urdu mixed with English words. TONE: Sarcastic, ALWAYS use real Unicode emojis (like 😂🔥). DO NOT use text shortcodes like :smile:."
 
             creator_info = "If anyone asks who created you, state that you are Vultix AI, developed by Muhammad Haroon Zahid, an IT entrepreneur from Bahawalpur."
@@ -451,14 +513,13 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
 
             messages = [{"role": "system", "content": system_instr}]
             
-            # 🚀 GROQ LIMIT FIX: Trim history to last 1 conversation to prevent 429 Too Many Tokens error
             history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(1).all()
             for h in reversed(history):
                 messages.append({"role": "user", "content": h.message})
                 messages.append({"role": "assistant", "content": h.response})
 
-            # Append RAG Context if it exists
-            final_user_transcript = request.transcript + rag_context
+            # Append RAG Context and Web Context
+            final_user_transcript = request.transcript + rag_context + web_context
 
             if request.image_data:
                 messages.append({"role": "user", "content": [{"type": "text", "text": final_user_transcript}, {"type": "image_url", "image_url": {"url": request.image_data}}]})
