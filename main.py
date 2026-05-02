@@ -522,23 +522,22 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     current_time = datetime.utcnow().strftime("%A, %B %d, %Y - %H:%M UTC")
 
     # -------------------------------------------------------------------------
-    # 👨‍💻 CODING ENGINE (OPENROUTER - LIVE UI CANVAS LOGIC)
+    # -------------------------------------------------------------------------
+    # 👨‍💻 CODING ENGINE (GROQ - LIVE UI CANVAS LOGIC) - Bypassing OpenRouter
     # -------------------------------------------------------------------------
     if request.task == "coding":
         try:
-            if not OPENROUTER_API_KEY: 
-                return {"error": "OpenRouter API Key missing on server."}
-
             system_instr = """ROLE: Expert UI/UX Developer and Senior Software Engineer.
             CRITICAL INSTRUCTIONS FOR LIVE UI CANVAS:
             1. If the user asks for a UI component, website, dashboard, or frontend design, you MUST output ONLY a single-file raw HTML code.
             2. You MUST use Tailwind CSS via CDN (`<script src="https://cdn.tailwindcss.com"></script>`) in the head.
             3. Include any necessary JavaScript within standard `<script>` tags inside the HTML. Do not reference external local files.
-            4. You MUST wrap the ENTIRE HTML code inside a standard markdown block exactly like this: ```html
+            4. You MUST wrap the ENTIRE HTML code inside a standard markdown block exactly like this: 
+```html
             ... your code here ...
             ```
             5. DO NOT write any conversational text, explanations, or greetings before or after the code block. ONLY provide the code.
-            6. If the user asks for general backend/algorithmic code (Python, C++, etc.), wrap it in the respective markdown block (e.g., ```python) with no extra text."""
+            6. If the user asks for general backend/algorithmic code, wrap it in the respective markdown block with no extra text."""
             
             history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(3).all()
             
@@ -551,27 +550,16 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             final_prompt = f"{web_context}\nUser Request: {request.transcript}"
             messages.append({"role": "user", "content": final_prompt})
             
-            logger.info(f"Dispatching Coding Task to OpenRouter (Claude 3.5 Sonnet) for User {user.id}")
+            logger.info(f"Dispatching Coding Task to Groq (Llama 70B) for User {user.id}")
             
-            headers = {
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "HTTP-Referer": "[https://vultix.ai](https://vultix.ai)", 
-                "X-Title": "Vultix AI",
-                "Content-Type": "application/json"
-            }
+            # Using Groq Client directly! No OpenRouter headaches!
+            res = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages,
+                temperature=0.3
+            )
             
-            payload = {
-                "model": "meta-llama/llama-3.1-8b-instruct:free", # Highly stable free model
-                "messages": messages,
-                "temperature": 0.5
-            }
-            
-            res = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload, timeout=60)
-            
-            if res.status_code == 200:
-                ai_msg = res.json()["choices"][0]["message"]["content"]
-            else:
-                raise Exception(f"OpenRouter Response Error: {res.text}")
+            ai_msg = res.choices[0].message.content
             
             new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_msg)
             if not user.is_pro: 
@@ -581,8 +569,8 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             
             return {"data": ai_msg, "chat_id": new_chat.id, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
         except Exception as e:
-            logger.error(f"OpenRouter Engine Complete Failure: {str(e)}")
-            return {"error": f"OpenRouter Logic Core Failed: {str(e)}. Please switch to Auto Mode."}
+            logger.error(f"Coding Engine Complete Failure: {str(e)}")
+            return {"error": f"Coding Logic Core Failed: {str(e)}. Please try again."}
 
     # -------------------------------------------------------------------------
     # 🧠 GENERAL / VIRAL / STUDY ENGINE (GROQ - LLAMA SERIES)
