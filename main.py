@@ -561,7 +561,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             }
             
             payload = {
-                "model": "anthropic/claude-3.5-sonnet",
+                "model": "qwen/qwen-2.5-coder-32b-instruct:free", # 100% Free & Beast for Coding
                 "messages": messages,
                 "temperature": 0.5
             }
