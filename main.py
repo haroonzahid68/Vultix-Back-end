@@ -43,7 +43,6 @@ except ImportError:
     print("WARNING: duckduckgo-search module not found. Tier 1 Web Search disabled.")
 
 import wikipedia 
-import google.generativeai as genai
 
 # =========================================================================
 # ⚙️ LOGGING & ENVIRONMENT SETUP
@@ -59,12 +58,11 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./vultix_core.db")
 ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "ceo123")
 
 # 🚀 MULTI-LLM & MONETIZATION KEYS
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("Gemini Engine configured successfully for Coding Mode.")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") 
+if OPENROUTER_API_KEY:
+    logger.info("OpenRouter Engine configured successfully for Coding Mode.")
 else:
-    logger.warning("GEMINI_API_KEY is not set. Coding mode will fail.")
+    logger.warning("OPENROUTER_API_KEY is not set. Coding mode will fail.")
 
 LEMON_API_KEY = os.getenv("LEMON_API_KEY")
 LEMON_WEBHOOK_SECRET = os.getenv("LEMON_WEBHOOK_SECRET")
@@ -114,21 +112,19 @@ class Document(Base):
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
 class Feedback(Base):
-    """New table to store thumbs up / down reactions for specific chat responses"""
     __tablename__ = "feedbacks"
     id = Column(Integer, primary_key=True, index=True)
     chat_id = Column(Integer, ForeignKey("chats.id"))
     user_id = Column(Integer, ForeignKey("users.id"))
-    is_positive = Column(Boolean) # True for Upvote, False for Downvote
+    is_positive = Column(Boolean) 
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-# Ensure all tables are created
 Base.metadata.create_all(bind=engine)
 
 # =========================================================================
 # 🚀 FASTAPI APP INITIALIZATION
 # =========================================================================
-app = FastAPI(title="Vultix AI Enterprise Engine", version="4.5.0", description="Developed by Muhammad Haroon Zahid")
+app = FastAPI(title="Vultix AI Enterprise Engine", version="5.0.0", description="Developed by Muhammad Haroon Zahid")
 
 app.add_middleware(
     CORSMiddleware, 
@@ -138,7 +134,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# API Clients Initialization
 if GROQ_API_KEY:
     client = Groq(api_key=GROQ_API_KEY)
     logger.info("Groq client initialized securely.")
@@ -254,14 +249,11 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
 # =========================================================================
 @app.post("/enhance-prompt")
 async def enhance_prompt(request: EnhancePromptRequest):
-    """Transforms a basic user prompt into a highly detailed Midjourney/SD prompt."""
     if not GROQ_API_KEY:
         return {"error": "Groq API Key missing on server configuration."}
         
     try:
-        system_msg = "You are an expert prompt engineer for advanced AI image generators like Midjourney and Stable Diffusion. The user will provide a basic concept. You must transform it into a highly detailed, professional, comma-separated image generation prompt. Include specific art styles, lighting settings (e.g., volumetric, cinematic), camera angles, and rendering engines (e.g., Unreal Engine 5, Octane Render). Your response MUST contain ONLY the final enhanced prompt. Do not add conversational text or formatting."
-        
-        logger.info(f"Enhancing prompt: {request.prompt[:30]}...")
+        system_msg = "You are an expert prompt engineer for advanced AI image generators like Midjourney and Stable Diffusion. The user will provide a basic concept. You must transform it into a highly detailed, professional, comma-separated image generation prompt. Include specific art styles, lighting settings, camera angles, and rendering engines. Your response MUST contain ONLY the final enhanced prompt."
         
         res = client.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -280,7 +272,6 @@ async def enhance_prompt(request: EnhancePromptRequest):
 
 @app.post("/feedback")
 async def submit_feedback(request: FeedbackRequest, db: Session = Depends(get_db)):
-    """Records Thumbs Up / Thumbs Down feedback from users to track AI quality."""
     chat = db.query(Chat).filter(Chat.id == request.chat_id).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Chat response not found. Cannot submit feedback.")
@@ -288,7 +279,6 @@ async def submit_feedback(request: FeedbackRequest, db: Session = Depends(get_db
     new_feedback = Feedback(chat_id=request.chat_id, user_id=request.user_id, is_positive=request.is_positive)
     db.add(new_feedback)
     db.commit()
-    logger.info(f"Feedback recorded for Chat ID {request.chat_id}: {'Positive' if request.is_positive else 'Negative'}")
     return {"message": "Feedback recorded successfully!"}
 
 # =========================================================================
@@ -365,15 +355,13 @@ async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
 # 🌐 WATERFALL WEB SEARCH SYSTEM (Tier 1: DDGS -> Tier 2: Wiki -> Tier 3: Google)
 # =========================================================================
 def perform_waterfall_search(query: str) -> str:
-    """Executes a highly robust, zero-cost fallback search mechanism for real-time AI knowledge."""
     results = []
     
-    # TIER 1: DuckDuckGo (Free, Unlimited, Live Data)
     try:
         if DDGS_ENABLED:
             logger.info("Attempting Web Search via DuckDuckGo (Tier 1)...")
             with DDGS() as ddgs:
-                time.sleep(1) # Anti-rate limit delay
+                time.sleep(1) 
                 ddgs_results = list(ddgs.text(query, max_results=3))
                 if ddgs_results:
                     for r in ddgs_results:
@@ -383,20 +371,18 @@ def perform_waterfall_search(query: str) -> str:
     except Exception as e:
         logger.warning(f"Tier 1 (DDGS) Failed or Rate Limited: {str(e)}")
 
-    # TIER 2: Wikipedia API (100% Free, Factual Fallback)
     try:
         logger.info("Attempting Web Search via Wikipedia API (Tier 2)...")
         wiki_search = wikipedia.search(query, results=1)
         if wiki_search:
             page = wikipedia.page(wiki_search[0])
-            snippet = page.summary[:600] # Expanded context
+            snippet = page.summary[:600] 
             results.append(f"Title: {page.title}\nSnippet: {snippet}...")
             logger.info("Tier 2 Wikipedia Search Successful.")
             return "\n\n[REAL-TIME WEB DATA (WIKIPEDIA)]:\n" + "\n---\n".join(results)
     except Exception as e:
         logger.warning(f"Tier 2 (Wikipedia) Search Failed: {str(e)}")
 
-    # TIER 3: Google Custom Search API (Last Resort, 100 limit)
     try:
         if GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX:
             logger.info("Attempting Web Search via Google Search API (Tier 3)...")
@@ -407,21 +393,17 @@ def perform_waterfall_search(query: str) -> str:
                     results.append(f"Title: {item.get('title')}\nSnippet: {item.get('snippet')}")
                 logger.info("Tier 3 Google Search Successful.")
                 return "\n\n[REAL-TIME WEB DATA (GOOGLE)]:\n" + "\n---\n".join(results)
-            else:
-                logger.error(f"Google API responded with status code: {res.status_code}")
     except Exception as e:
         logger.error(f"Tier 3 (Google) Search completely failed: {str(e)}")
 
-    logger.warning("All Web Search Tiers Exhausted. Returning empty context.")
     return "" 
 
 # =========================================================================
-# 🧠 KNOWLEDGE VAULT: RAG SYSTEM (Document Upload & Context)
+# 🧠 KNOWLEDGE VAULT: RAG SYSTEM
 # =========================================================================
 @app.post("/upload-document")
 async def upload_document(user_id: int = Form(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not RAG_ENABLED: 
-        logger.error("RAG upload failed: System dependencies missing.")
         return {"error": "RAG Server Dependencies Missing. Ensure PyPDF2, numpy, and faiss are installed."}
         
     user = db.query(User).filter(User.id == user_id).first()
@@ -448,11 +430,10 @@ async def upload_document(user_id: int = Form(...), file: UploadFile = File(...)
         logger.info(f"Knowledge Vault updated. Document '{file.filename}' processed for User {user_id}")
         return {"message": f"Document '{file.filename}' processed and saved to your Knowledge Vault.", "doc_id": new_doc.id}
     except Exception as e:
-        logger.error(f"Document processing failed spectacularly: {str(e)}")
+        logger.error(f"Document processing failed: {str(e)}")
         return {"error": f"Failed to read and process document: {str(e)}"}
 
 def get_rag_context(user_id: int, query: str, db: Session) -> str:
-    """Helper function to fetch relevant text from DB based on keyword analysis"""
     docs = db.query(Document).filter(Document.user_id == user_id).order_by(Document.uploaded_at.desc()).limit(2).all()
     if not docs: 
         return ""
@@ -468,7 +449,6 @@ def get_rag_context(user_id: int, query: str, db: Session) -> str:
                     break
                     
     if context_chunks:
-        logger.info(f"RAG Context successfully retrieved for user {user_id}")
         return f"\n\n[RELEVANT VAULT DOCUMENTS]:\n" + "\n...".join(context_chunks) + "\n[END VAULT CONTEXT]\n"
     return ""
 
@@ -483,7 +463,6 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     if user.is_banned: 
         return {"error": "ACCOUNT_BANNED"}
 
-    # Daily Token/Response Limiter
     now = datetime.utcnow()
     if not user.last_reset_time: 
         user.last_reset_time = now
@@ -491,13 +470,12 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
         user.response_count = 0
         user.last_reset_time = now
         db.commit()
-        logger.info(f"Daily quota reset for user {user.id}")
 
     if not user.is_pro and user.response_count >= 50: 
         return {"error": "LIMIT_REACHED. Please upgrade to Pro or wait 24 hours."}
 
     # -------------------------------------------------------------------------
-    # 🎨 IMAGE GENERATION PIPELINE (WITH ASPECT RATIOS)
+    # 🎨 IMAGE GENERATION PIPELINE
     # -------------------------------------------------------------------------
     if request.task == "image":
         width, height = (1280, 720) if request.selected_model == "16:9" else (720, 1280) if request.selected_model == "9:16" else (1024, 1024)
@@ -513,13 +491,10 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
                     img_data = base64.b64encode(response.content).decode("utf-8")
                     ai_response = f"![Generated Image](data:image/png;base64,{img_data})"
                 else: 
-                    logger.warning(f"HF API returned status {response.status_code}")
                     ai_response = "HF Engine is warming up or busy. Please try again in 15 seconds! ⏳"
             except Exception as e: 
-                logger.error(f"HD Image Gen Failed: {str(e)}")
                 ai_response = f"Critical Engine Failure: {str(e)}"
         else:
-            # Pollinations Fast Generation Engine
             cleaned_prompt = request.transcript.strip()[:250]
             encoded_prompt = urllib.parse.quote(cleaned_prompt + ", highly detailed, masterpiece, 8k resolution")
             image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={int(time.time())}&width={width}&height={height}&nologo=true"
@@ -542,37 +517,61 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
     if any(word in request.transcript.lower() for word in search_keywords):
         raw_web_data = perform_waterfall_search(request.transcript)
         if raw_web_data:
-            # Enforcing strict obedience from LLM regarding web data
             web_context = raw_web_data + "\n[STRICT SYSTEM COMMAND: You must answer the user's prompt directly using the real-time web data provided above. Be specific, provide numbers, prices, or weather stats. DO NOT tell the user to visit links or claim you don't have real-time access.]\n\n"
 
     current_time = datetime.utcnow().strftime("%A, %B %d, %Y - %H:%M UTC")
 
     # -------------------------------------------------------------------------
-    # 👨‍💻 CODING ENGINE (GOOGLE GEMINI) - VS CODE FORMAT ENFORCED
+    # 👨‍💻 CODING ENGINE (OPENROUTER - LIVE UI CANVAS LOGIC)
     # -------------------------------------------------------------------------
     if request.task == "coding":
         try:
-            if not GEMINI_API_KEY: 
-                return {"error": "Gemini Engine requires API key on server."}
+            if not OPENROUTER_API_KEY: 
+                return {"error": "OpenRouter API Key missing on server."}
 
-            # STRICT INSTRUCTION FOR SYNTAX HIGHLIGHTING (VS CODE STYLE)
-            system_instr = "ROLE: Senior 10x Software Engineer. STRICT FORMATTING RULE: You MUST output all code inside standard markdown blocks (e.g., ```cpp or ```python). Do not explain code unless explicitly asked. Produce highly robust, academic-level clean logic."
+            system_instr = """ROLE: Expert UI/UX Developer and Senior Software Engineer.
+            CRITICAL INSTRUCTIONS FOR LIVE UI CANVAS:
+            1. If the user asks for a UI component, website, dashboard, or frontend design, you MUST output ONLY a single-file raw HTML code.
+            2. You MUST use Tailwind CSS via CDN (`<script src="https://cdn.tailwindcss.com"></script>`) in the head.
+            3. Include any necessary JavaScript within standard `<script>` tags inside the HTML. Do not reference external local files.
+            4. You MUST wrap the ENTIRE HTML code inside a standard markdown block exactly like this: ```html
+            ... your code here ...
+            ```
+            5. DO NOT write any conversational text, explanations, or greetings before or after the code block. ONLY provide the code.
+            6. If the user asks for general backend/algorithmic code (Python, C++, etc.), wrap it in the respective markdown block (e.g., ```python) with no extra text."""
             
-            # Trimming history to last 2 conversations (4 messages) for context
-            history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(2).all()
+            history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(3).all()
             
-            gemini_history = []
+            messages = [{"role": "system", "content": system_instr}]
+            
             for h in reversed(history):
-                gemini_history.append({"role": "user", "parts": [h.message]})
-                gemini_history.append({"role": "model", "parts": [h.response]})
+                messages.append({"role": "user", "content": h.message})
+                messages.append({"role": "assistant", "content": h.response})
 
-            model = genai.GenerativeModel("gemini-1.5-flash")
-            final_prompt = f"[{system_instr}]\n{web_context}\nUser Request: {request.transcript}"
+            final_prompt = f"{web_context}\nUser Request: {request.transcript}"
+            messages.append({"role": "user", "content": final_prompt})
             
-            logger.info(f"Dispatching Coding Task to Gemini for User {user.id}")
-            chat_session = model.start_chat(history=gemini_history)
-            res = chat_session.send_message(final_prompt)
-            ai_msg = res.text
+            logger.info(f"Dispatching Coding Task to OpenRouter (Claude 3.5 Sonnet) for User {user.id}")
+            
+            headers = {
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "HTTP-Referer": "[https://vultix.ai](https://vultix.ai)", 
+                "X-Title": "Vultix AI",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": "anthropic/claude-3.5-sonnet",
+                "messages": messages,
+                "temperature": 0.5
+            }
+            
+            res = requests.post("[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)", headers=headers, json=payload, timeout=60)
+            
+            if res.status_code == 200:
+                ai_msg = res.json()["choices"][0]["message"]["content"]
+            else:
+                raise Exception(f"OpenRouter Response Error: {res.text}")
             
             new_chat = Chat(user_id=request.user_id, session_id=request.session_id, message=request.transcript, response=ai_msg)
             if not user.is_pro: 
@@ -582,8 +581,8 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             
             return {"data": ai_msg, "chat_id": new_chat.id, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
         except Exception as e:
-            logger.error(f"Gemini Engine Complete Failure: {str(e)}")
-            return {"error": f"Gemini Logic Core Failed: {str(e)}. Please switch to Auto Mode."}
+            logger.error(f"OpenRouter Engine Complete Failure: {str(e)}")
+            return {"error": f"OpenRouter Logic Core Failed: {str(e)}. Please switch to Auto Mode."}
 
     # -------------------------------------------------------------------------
     # 🧠 GENERAL / VIRAL / STUDY ENGINE (GROQ - LLAMA SERIES)
@@ -593,17 +592,14 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             model_to_use = "llama-3.3-70b-versatile" if request.selected_model == "llama-3.3-70b-versatile" else "llama-3.1-8b-instant"
             
             if model_to_use == "llama-3.3-70b-versatile" and not user.is_pro: 
-                logger.warning(f"Free user {user.username} tried to bypass Pro model.")
                 return {"error": "Llama 70B is a PRO_FEATURE"}
                 
             if request.image_data: 
                 model_to_use = "llama-3.2-90b-vision-instruct"
 
-            # 🚀 STRICT IDENTITY COMMAND FOR SPECIFIC QUESTIONS
             intro_keywords = ["who are you", "who made you", "your creator", "who created", "kis ne banaya", "tumhara naam", "who is your developer"]
             creator_info = ""
             if any(word in request.transcript.lower() for word in intro_keywords):
-                logger.info(f"Creator Intro Triggered by User {user.id}")
                 creator_info = "CRITICAL INSTRUCTION: The user is asking about your identity or creator. You MUST answer EXACTLY with this information: 'I am Vultix AI. My creator is Muhammad Haroon Zahid. He is from Bahawalpur, but currently, he is in Lahore doing his BS IET (Information Engineering Technology) at the University of Lahore.' Do not add any other backstory."
 
             task_rules = ""
@@ -612,14 +608,12 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             elif request.task == "study":
                 task_rules = "ROLE: Academic Speedster. For MCQs, provide ONLY the direct letter answer."
             else:
-                # 🚀 FIXED EMOJIS & ROMAN URDU ISSUE
-                task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Speak in casual, highly conversational English. Do not use Roman Urdu. TONE: Friendly, slightly sarcastic. EMOJI RULE: Strictly use real Unicode emojis (like 😂 or 🔥), but USE THEM RARELY (max 1 or 2 emojis per full response). Avoid emoji spam."
+                task_rules = "ROLE: Best friend and supportive AI. LANGUAGE RULE: Speak in casual, highly conversational English. Do not use Roman Urdu. TONE: Friendly, slightly sarcastic. EMOJI RULE: Strictly use real Unicode emojis (max 1 or 2 emojis per full response). Avoid emoji spam."
 
             system_instr = f"Current Real-Time System Clock: {current_time}.\n{creator_info}\n{task_rules}"
 
             messages = [{"role": "system", "content": system_instr}]
             
-            # Trim history to 1 message to bypass Groq Context Limit Error
             history = db.query(Chat).filter(Chat.session_id == request.session_id).order_by(Chat.id.desc()).limit(1).all()
             for h in reversed(history):
                 messages.append({"role": "user", "content": h.message})
@@ -632,7 +626,6 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             else:
                 messages.append({"role": "user", "content": final_user_transcript})
 
-            logger.info(f"Dispatching Groq Task ({model_to_use}) for User {user.id}")
             res = client.chat.completions.create(model=model_to_use, messages=messages)
             ai_msg = res.choices[0].message.content
             
@@ -650,10 +643,8 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             error_msg = str(e)
             logger.error(f"Groq Route Failed: {error_msg}")
             
-            # Complex Vision Fallback Restored
             if "model_not_found" in error_msg and request.image_data:
                 try:
-                    logger.info("Attempting Vision Fallback to 11b model...")
                     fallback_model = "llama-3.2-11b-vision-instruct"
                     res = client.chat.completions.create(model=fallback_model, messages=messages)
                     ai_msg = res.choices[0].message.content
@@ -666,21 +657,18 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
                     db.commit()
                     return {"data": ai_msg, "chat_id": new_chat.id, "remaining": "Unlimited" if user.is_pro else 50 - user.response_count}
                 except Exception as inner_e:
-                    logger.error(f"Vision Fallback Failed: {str(inner_e)}")
                     return {"error": f"Critical Vision API Failure: {str(inner_e)}"}
             
-            # Groq Limit Handling
             if "rate_limit_exceeded" in error_msg.lower() or "429" in error_msg:
-                return {"error": "Groq Engine Rate Limit Exceeded. The system is cooling down. Please use Coding Mode (Gemini) temporarily!"}
+                return {"error": "Groq Engine Rate Limit Exceeded. The system is cooling down. Please use Coding Mode temporarily!"}
             
             return {"error": error_msg}
 
 # =========================================================================
-# 🏢 ADMIN DASHBOARD APIS (FULLY RESTORED)
+# 🏢 ADMIN DASHBOARD APIS 
 # =========================================================================
 @app.get("/admin/user_full_history/{user_id}")
 async def get_admin_user_history(user_id: int, db: Session = Depends(get_db), x_admin_key: str = Header(...)):
-    """Allows admin to view full chat history of a specific user for debugging"""
     if x_admin_key != ADMIN_MASTER_KEY:
         raise HTTPException(status_code=403, detail="ACCESS_DENIED")
     
@@ -689,7 +677,6 @@ async def get_admin_user_history(user_id: int, db: Session = Depends(get_db), x_
 
 @app.get("/history/{user_id}")
 async def get_user_history(user_id: int, db: Session = Depends(get_db)):
-    """Retrieves session list for frontend sidebar"""
     chats = db.query(Chat).filter(Chat.user_id == user_id).order_by(Chat.timestamp.desc()).all()
     sessions = []
     seen = set()
@@ -702,13 +689,11 @@ async def get_user_history(user_id: int, db: Session = Depends(get_db)):
 
 @app.get("/history/session/{session_id}")
 async def get_session_chat(session_id: str, db: Session = Depends(get_db)):
-    """Retrieves specific session chat thread"""
     chats = db.query(Chat).filter(Chat.session_id == session_id).order_by(Chat.timestamp.asc()).all()
     return {"chats": [{"message": c.message, "response": c.response} for c in chats]}
 
 @app.delete("/history/session/{session_id}")
 async def delete_session(session_id: str, db: Session = Depends(get_db)):
-    """Deletes a user's specific session thread"""
     try:
         db.query(Chat).filter(Chat.session_id == session_id).delete()
         db.commit()
@@ -719,7 +704,6 @@ async def delete_session(session_id: str, db: Session = Depends(get_db)):
 
 @app.get("/admin/stats")
 async def get_admin_stats(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
-    """Generates overarching stats for the Admin Dashboard"""
     total_users = db.query(User).count()
     total_pro_users = db.query(User).filter(User.is_pro == True).count()
     total_chats = db.query(Chat).count()
@@ -734,7 +718,6 @@ async def get_admin_stats(db: Session = Depends(get_db), _: None = Depends(verif
 
 @app.get("/admin/users")
 async def get_admin_users(db: Session = Depends(get_db), _: None = Depends(verify_admin)):
-    """Retrieves full user list with activity metrics for Admin table"""
     users = db.query(User).all()
     user_list = []
     for u in users:
@@ -752,26 +735,22 @@ async def get_admin_users(db: Session = Depends(get_db), _: None = Depends(verif
 
 @app.post("/admin/toggle_ban/{user_id}")
 async def toggle_user_ban(user_id: int, db: Session = Depends(get_db), _: None = Depends(verify_admin)):
-    """Suspend or unsuspend a user account instantly"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user: 
         raise HTTPException(status_code=404, detail="User not found in system")
         
     user.is_banned = not user.is_banned
     db.commit()
-    logger.warning(f"Admin action: User {user.id} ban status changed to {user.is_banned}")
     return {"message": "Status updated successfully", "is_banned": user.is_banned}
 
 @app.post("/admin/toggle_pro/{user_id}")
 async def toggle_user_pro(user_id: int, db: Session = Depends(get_db), _: None = Depends(verify_admin)):
-    """Manually grant or revoke Premium (Pro) status"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user: 
         raise HTTPException(status_code=404, detail="User not found in system")
         
     user.is_pro = not user.is_pro
     db.commit()
-    logger.info(f"Admin action: User {user.id} pro status changed to {user.is_pro}")
     return {"message": "Premium status updated successfully", "is_pro": user.is_pro}
 
 # =========================================================================
