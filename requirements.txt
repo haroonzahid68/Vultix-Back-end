@@ -8,4 +8,7 @@ tavily-python
 google-auth
 requests
 psycopg2-binary
+PyPDF2==3.0.1
+faiss-cpu==1.8.0
+numpy==1.26.4
 google-generativeai>=0.5.2
