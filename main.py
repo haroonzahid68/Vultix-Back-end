@@ -285,7 +285,7 @@ async def process_content(request: ChatRequest, db: Session = Depends(get_db)):
             
             # The SDK automatically handles URLs, Versions, and Payloads safely!
             model_name = "gemini-1.5-flash" if user.is_pro else "gemini-1.5-flash-latest"
-            model = genai.GenerativeModel(model_name)
+            model = genai.GenerativeModel("gemini-1.5-flash")
             
             # Start chat with history and send the new prompt
             chat_session = model.start_chat(history=gemini_history)
