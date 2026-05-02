@@ -9,6 +9,7 @@ import hmac
 import hashlib
 import json
 import logging
+import wikipedia
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, UploadFile, File, Form
 from pydantic import BaseModel
@@ -275,12 +276,12 @@ async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
     return {"status": "success"}
 
 # === 🌐 WATERFALL WEB SEARCH SYSTEM (DDGS -> BRAVE -> GOOGLE) ===
-import wikipedia # ADD THIS TO THE TOP OF YOUR FILE WITH OTHER IMPORTS
+    # ADD THIS TO THE TOP OF YOUR FILE WITH OTHER IMPORTS
 
 # ... (rest of your code) ...
 
 # === 🌐 WATERFALL WEB SEARCH SYSTEM (DDGS -> WIKIPEDIA -> GOOGLE) ===
-def perform_waterfall_search(query: str) -> str:
+    def perform_waterfall_search(query: str) -> str:
     results = []
     
     # Tier 1: DuckDuckGo (Free, Unlimited) - Made more robust
